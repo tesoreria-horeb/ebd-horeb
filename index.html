@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F1.1 -->
+<!-- VERSION: 2026-09-21-F1.2 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -122,7 +122,6 @@ details .cont{padding:0 1rem 1rem}
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 /* =====================================================================
    EBD · La Roca de Horeb — Fase 1
@@ -398,7 +397,7 @@ function vAlumnos(){
   const clases=g?S.clases:misClases();
   let h=`<h1>${g?'Alumnos':'Mi clase'}</h1>`;
   if(!S.ciclo)return h+vacio('Primero hace falta un ciclo','Crea el ciclo para poder asignar alumnos a sus clases.');
-  if(g)h+=`<div class="acciones"><button class="btn" data-act="alnuevo">Nuevo alumno</button><button class="btn sec" data-act="alimport">Importar Excel</button><button class="btn sec" data-act="alasignar">Asignar clases por edad</button></div>`;
+  if(g)h+=`<div class="acciones"><button class="btn" data-act="alnuevo">Nuevo alumno</button><button class="btn sec" data-act="alasignar">Asignar clases por edad</button></div>`;
   h+=`<label for="f_q" class="hidden">Buscar</label><input id="f_q" type="search" placeholder="Buscar por nombre o DNI" value="${esc(S.fq)}" data-inp="filtro">
   <label for="f_c" class="hidden">Clase</label><select id="f_c" data-chg="filtro" style="margin-top:.6rem"><option value="">Todas las clases</option>${g?'<option value="_sin" '+(S.fclase==='_sin'?'selected':'')+'>Sin clase</option>':''}${clases.map(c=>`<option value="${c.id}" ${S.fclase===c.id?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>
   <p id="cuenta" class="muted small" style="margin:.7rem 0 0"></p><ul class="lista" id="listaAl"></ul>`;
@@ -423,33 +422,45 @@ function pintarAlumnos(){
     return g?`<li><button class="fila" data-act="aledit" data-id="${a.id}">${inner}</button></li>`:`<li class="fila">${inner}</li>`;
   }).join('');
 }
-function modalAlumno(id){
-  const a=id?S.alumnos.find(x=>x.id===id):{nombre:'',dni:'',fechaNac:'',sexo:'',telefono:'',responsable:'',claseId:'',activo:true};
-  const opts=S.clases.map(c=>`<option value="${c.id}" ${a.claseId===c.id?'selected':''}>${esc(c.nombre)}</option>`).join('');
-  const body=`<label for="a_nom">Nombre completo</label><input id="a_nom" value="${esc(a.nombre)}" autocomplete="off">
-  <div class="grid2"><div><label for="a_dni">DNI <span class="opt">(opcional)</span></label><input id="a_dni" value="${esc(a.dni)}" inputmode="numeric"></div>
-  <div><label for="a_fn">Fecha de nacimiento <span class="opt">(opcional)</span></label><input id="a_fn" type="date" value="${esc(a.fechaNac)}"></div></div>
+function modalAlumno(id,claseId){
+  const a=id?S.alumnos.find(x=>x.id===id):{nombre:'',dni:'',fechaNac:'',sexo:'',telefono:'',responsable:'',claseId:claseId||'',activo:true};
+  const opts=S.clases.map(c=>`<option value="${c.id}" ${a.claseId===c.id?'selected':''}>${esc(c.nombre)}${c.sexo!=='mixta'?' ('+sexoTxt(c.sexo).toLowerCase()+')':''}</option>`).join('');
+  const body=`<label for="a_cl">Clase</label><select id="a_cl" data-chg="alclase"><option value="">Asignar según la edad</option>${opts}</select>
+  <label for="a_nom">Nombre completo</label><input id="a_nom" value="${esc(a.nombre)}" autocomplete="off">
   <div class="grid2"><div><label for="a_sx">Sexo</label><select id="a_sx"><option value="">Elegir</option><option value="M" ${a.sexo==='M'?'selected':''}>Varón</option><option value="F" ${a.sexo==='F'?'selected':''}>Dama</option></select></div>
   <div><label for="a_tel">Teléfono <span class="opt">(opcional)</span></label><input id="a_tel" value="${esc(a.telefono)}" inputmode="tel"></div></div>
+  <div class="grid2"><div><label for="a_fn">Fecha de nacimiento <span class="opt">(opcional)</span></label><input id="a_fn" type="date" value="${esc(a.fechaNac)}"></div>
+  <div><label for="a_dni">DNI <span class="opt">(opcional)</span></label><input id="a_dni" value="${esc(a.dni)}" inputmode="numeric"></div></div>
   <label for="a_resp">Responsable <span class="opt">(para menores, opcional)</span></label><input id="a_resp" value="${esc(a.responsable)}">
-  <label for="a_cl">Clase</label><select id="a_cl"><option value="">Asignar según la edad</option>${opts}</select>
   <div class="check"><input type="checkbox" id="a_act" ${a.activo!==false?'checked':''}><label for="a_act">Alumno activo</label></div>`;
-  const btns=[{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Guardar alumno',fn:()=>guardarAlumno(id)}];
+  const btns=[{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Guardar alumno',fn:()=>guardarAlumno(id,false)}];
+  if(!id)btns.splice(1,0,{label:'Guardar y agregar otro',cls:'sec',fn:()=>guardarAlumno(null,true)});
   if(id&&isAdmin())btns.unshift({label:'Eliminar',cls:'dng',fn:()=>eliminarAlumno(id)});
   openModal(id?'Editar alumno':'Nuevo alumno',body,btns);
+  aplicarClaseSexo(false); $('a_nom').focus();
 }
-async function guardarAlumno(id){
+function aplicarClaseSexo(forzar){
+  const sx=$('a_sx'),cl=$('a_cl'); if(!sx||!cl)return;
+  const c=S.clases.find(x=>x.id===cl.value),esp=c&&c.sexo==='damas'?'F':c&&c.sexo==='varones'?'M':'';
+  if(esp&&(forzar||!sx.value||sx.value===esp)){sx.value=esp;sx.disabled=true;}else sx.disabled=false;
+}
+async function guardarAlumno(id,otro){
   const d={nombre:$('a_nom').value.trim().replace(/\s+/g,' '),dni:$('a_dni').value.trim(),fechaNac:$('a_fn').value,sexo:$('a_sx').value,
     telefono:$('a_tel').value.trim(),responsable:$('a_resp').value.trim(),claseId:$('a_cl').value,activo:$('a_act').checked};
   if(!d.nombre)return toast('Falta el nombre del alumno.',1);
   if(!d.sexo)return toast('Elige el sexo del alumno.',1);
+  const cl=S.clases.find(c=>c.id===d.claseId);
+  if(cl&&cl.sexo==='damas'&&d.sexo!=='F')return toast(cl.nombre+' es una clase solo de damas.',1);
+  if(cl&&cl.sexo==='varones'&&d.sexo!=='M')return toast(cl.nombre+' es una clase solo de varones.',1);
   if(d.dni&&S.alumnos.some(x=>x.dni===d.dni&&x.id!==id))return toast('Ya hay un alumno con ese DNI.',1);
   if(!d.claseId)d.claseId=sugerirClase(d)||'';
   try{
     if(id){await db.collection('ebd_alumnos').doc(id).update({...d,actualizado:ts()});const i=S.alumnos.findIndex(x=>x.id===id);S.alumnos[i]={...S.alumnos[i],...d};}
     else{const r=await db.collection('ebd_alumnos').add({...d,creado:ts(),actualizado:ts()});S.alumnos.push({id:r.id,...d});}
     S.alumnos.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
-    closeModal(); render(); toast(d.claseId?'Alumno guardado.':'Alumno guardado, sin clase asignada.');
+    closeModal(); render();
+    if(otro){modalAlumno(null,d.claseId);toast('Alumno guardado. Registra el siguiente.');}
+    else toast(d.claseId?'Alumno guardado.':'Alumno guardado, sin clase asignada.');
   }catch(e){toast('No se pudo guardar: '+e.message,1);}
 }
 async function eliminarAlumno(id){
@@ -470,93 +481,6 @@ async function asignarPorEdad(){
     cambios.forEach(([a,c])=>a.claseId=c); render();
     toast(`Se asignó clase a ${cambios.length} alumnos.${sinDatos?' '+sinDatos+' no se pudieron ubicar.':''}`);
   }catch(e){toast(e.message,1);}
-  cargando(false);
-}
-
-/* ---------- Importar alumnos desde Excel ---------- */
-const COLS={nombre:['nombre','nombres','apellidosynombres','nombresyapellidos','nombrecompleto','alumno'],dni:['dni','documento','nrodocumento','numerodedocumento'],
-  fechaNac:['fechadenacimiento','fechanacimiento','nacimiento','fechanac','fnac'],sexo:['sexo','genero'],telefono:['telefono','celular','cel','whatsapp'],
-  responsable:['responsable','apoderado','tutor','padre'],clase:['clase']};
-function pick(row,key){for(const k of Object.keys(row)){if(COLS[key].includes(norm(k)))return row[k];}return '';}
-function parseFecha(v){
-  if(v===''||v==null)return '';
-  const f=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-  let d=null;
-  if(v instanceof Date)d=new Date(v.getTime()+12*3600e3);
-  else if(typeof v==='number'){const u=new Date(Math.round((v-25569)*86400e3));d=new Date(u.getUTCFullYear(),u.getUTCMonth(),u.getUTCDate());}
-  else{
-    const s=String(v).trim(); let m;
-    if((m=s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/)))d=new Date(+m[1],+m[2]-1,+m[3]);
-    else if((m=s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/)))d=new Date(+m[3],+m[2]-1,+m[1]);
-  }
-  if(!d||isNaN(d)||d.getFullYear()<1900||d>new Date())return null;
-  return f(d);
-}
-function descargarPlantilla(){
-  const ws=XLSX.utils.aoa_to_sheet([['Nombre','DNI','Fecha de nacimiento','Sexo','Telefono','Responsable','Clase'],
-    ['Ana Pérez Rojas','12345678','2014-05-20','F','999888777','María Rojas',''],['Luis Gómez Díaz','87654321','1985-11-02','M','988777666','','']]);
-  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Alumnos');XLSX.writeFile(wb,'plantilla-alumnos-ebd.xlsx');
-}
-function pedirArchivo(){
-  if(!S.clases.length)return toast('Primero crea las clases del ciclo.',1);
-  openModal('Importar alumnos desde Excel',`<p class="muted small">El archivo necesita una fila de títulos con estas columnas: Nombre, DNI, Fecha de nacimiento, Sexo (M o F), Teléfono, Responsable y Clase. Solo el nombre y el sexo son obligatorios. Si no pones la clase, se asigna según la edad.</p>
-  <div class="acciones"><button class="btn sec small" data-act="plantilla">Descargar plantilla</button></div>
-  <label for="i_file">Archivo (.xlsx, .xls o .csv)</label><input id="i_file" type="file" accept=".xlsx,.xls,.csv">`,[{label:'Cancelar',cls:'sec',fn:closeModal}]);
-  $('i_file').onchange=e=>{if(e.target.files[0])leerExcel(e.target.files[0]);};
-}
-async function leerExcel(file){
-  cargando(true);
-  try{
-    const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
-    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:'',raw:true});
-    const porDni={};S.alumnos.forEach(a=>{if(a.dni)porDni[a.dni]=a;});
-    const vistos=new Set(),items=[];
-    rows.forEach((r,i)=>{
-      const it={fila:i+2,errores:[],avisos:[]};
-      it.nombre=String(pick(r,'nombre')).trim().replace(/\s+/g,' ');
-      let dni=pick(r,'dni'); if(typeof dni==='number'){dni=String(Math.round(dni));if(dni.length>=6&&dni.length<8)dni=dni.padStart(8,'0');}
-      it.dni=String(dni).replace(/\s/g,'');
-      const sx=normTxt(pick(r,'sexo')).trim(); it.sexo=/^(m|v|masc|varon|hombre)/.test(sx)?'M':/^(f|d|fem|dama|mujer)/.test(sx)?'F':'';
-      const fn=parseFecha(pick(r,'fechaNac')); it.fechaNac=fn||''; if(fn===null)it.avisos.push('fecha no válida, se omite');
-      it.telefono=String(pick(r,'telefono')).trim(); it.responsable=String(pick(r,'responsable')).trim();
-      const ct=String(pick(r,'clase')).trim(); const cl=ct?S.clases.find(c=>norm(c.nombre)===norm(ct)):null;
-      if(ct&&!cl)it.avisos.push('la clase «'+ct+'» no existe, se asigna por edad');
-      it.claseExplicita=cl?cl.id:''; it.claseId=it.claseExplicita||sugerirClase(it)||'';
-      if(!it.nombre)it.errores.push('falta el nombre'); if(!it.sexo)it.errores.push('falta el sexo (M o F)');
-      if(it.dni&&vistos.has(it.dni))it.errores.push('DNI repetido en el archivo'); if(it.dni)vistos.add(it.dni);
-      it.existente=it.dni&&porDni[it.dni]?porDni[it.dni]:null;
-      if(!it.claseId&&!it.errores.length)it.avisos.push('sin clase asignada');
-      items.push(it);
-    });
-    cargando(false);
-    if(!items.length)return toast('El archivo no tiene filas con datos.',1);
-    S.imp=items.filter(i=>!i.errores.length);
-    const bad=items.filter(i=>i.errores.length),nuevos=S.imp.filter(i=>!i.existente).length,upd=S.imp.length-nuevos;
-    openModal('Revisar antes de importar',`<p>Se encontraron <strong>${items.length}</strong> filas.</p>
-    <div class="aviso"><ul><li>${nuevos} alumnos nuevos</li><li>${upd} ya existen por DNI y se actualizarán</li><li>${bad.length} filas con errores que se omiten</li></ul></div>
-    ${bad.length?`<div class="aviso mal"><strong>Filas omitidas</strong><ul>${bad.slice(0,15).map(b=>`<li>Fila ${b.fila}: ${esc(b.errores.join(', '))}</li>`).join('')}${bad.length>15?`<li>y ${bad.length-15} más</li>`:''}</ul></div>`:''}
-    ${S.imp.some(i=>i.avisos.length)?`<div class="aviso"><strong>Avisos</strong><ul>${S.imp.filter(i=>i.avisos.length).slice(0,10).map(b=>`<li>Fila ${b.fila}: ${esc(b.avisos.join(', '))}</li>`).join('')}</ul></div>`:''}`,
-    [{label:'Cancelar',cls:'sec',fn:closeModal},{label:`Importar ${S.imp.length} alumnos`,fn:confirmarImport}]);
-    if(!S.imp.length)document.querySelector('#modal .btn:last-child').disabled=true;
-  }catch(e){cargando(false);toast('No se pudo leer el archivo: '+e.message,1);}
-}
-async function confirmarImport(){
-  const items=S.imp;closeModal();cargando(true);
-  try{
-    for(let i=0;i<items.length;i+=400){
-      const b=db.batch();
-      items.slice(i,i+400).forEach(it=>{
-        const d={nombre:it.nombre,dni:it.dni,fechaNac:it.fechaNac,sexo:it.sexo,telefono:it.telefono,responsable:it.responsable,actualizado:ts()};
-        if(it.existente){
-          const u={};Object.keys(d).forEach(k=>{if(d[k]!==''||k==='actualizado')u[k]=d[k];});
-          if(it.claseExplicita||!claseDe(it.existente))u.claseId=it.claseId;
-          b.update(db.collection('ebd_alumnos').doc(it.existente.id),u);
-        }else b.set(db.collection('ebd_alumnos').doc(),{...d,claseId:it.claseId,activo:true,creado:ts()});
-      });
-      await b.commit();
-    }
-    await cargarAlumnos();render();toast(`Se importaron ${items.length} alumnos.`);
-  }catch(e){toast('La importación falló: '+e.message,1);}
   cargando(false);
 }
 
@@ -898,10 +822,8 @@ const acciones={
   salir(){auth.signOut();},
   ir(d){go(d.v);},
   ajtab(d){S.ajTab=d.t;render();},
-  plantilla(){descargarPlantilla();},
-  alnuevo(){modalAlumno(null);},
+  alnuevo(){modalAlumno(null,(S.fclase&&S.fclase!=='_sin')?S.fclase:'');},
   aledit(d){modalAlumno(d.id);},
-  alimport(){pedirArchivo();},
   alasignar(){asignarPorEdad();},
   clnueva(){abrirClase(null);},
   cledit(d){abrirClase(d.id);},
@@ -929,7 +851,8 @@ const acciones={
   evalguardar(){guardarEval();}
 };
 const cambios={
-  filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();}
+  filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();},
+  alclase(){aplicarClaseSexo(true);}
 };
 document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(t&&acciones[t.dataset.act]){e.preventDefault();acciones[t.dataset.act](t.dataset,t);}});
 document.addEventListener('change',e=>{const t=e.target.closest('[data-chg]');if(t&&cambios[t.dataset.chg])cambios[t.dataset.chg](t.dataset,t);});
