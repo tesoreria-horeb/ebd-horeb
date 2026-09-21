@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- VERSION: 2026-09-21-F1.1 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -147,7 +148,7 @@ const NAV = {
   profesor:[['hoy','Hoy'],['alumnos','Mi clase']]
 };
 const S = {user:null,perfil:null,cfg:CFG_DEF,fajas:[],ciclos:[],ciclo:null,clases:[],usuarios:[],pendientes:[],alumnos:[],
-  view:'hoy',param:null,ajTab:'fajas',fq:'',fclase:'',edit:null,lecOpen:false};
+  view:'hoy',param:null,ajTab:'fajas',fq:'',fclase:'',edit:null,lecOpen:false,verInact:false};
 let db,auth;
 const $ = id => document.getElementById(id);
 const ts = () => firebase.firestore.FieldValue.serverTimestamp();
@@ -270,7 +271,7 @@ async function cargarCiclo(){
     const us=await db.collection('ebd_usuarios').get();
     S.usuarios=us.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'','es'));
   }
-  if(isAdmin()){
+  if(isGestor()){
     const ps=await db.collection('ebd_pendientes').get();
     S.pendientes=ps.docs.map(d=>({id:d.id,...d.data()}));
   }
@@ -321,8 +322,10 @@ function sugerirClase(a){
   if(!S.ciclo)return null;
   const e=edadEn(a.fechaNac,S.ciclo.fechaInicio); if(e==null)return null;
   const f=(S.ciclo.fajasSnap||[]).find(f=>e>=f.edadMin&&(f.edadMax==null||e<=f.edadMax)); if(!f)return null;
-  const want=f.separaSexo?(a.sexo==='M'?'varones':a.sexo==='F'?'damas':null):'mixta'; if(!want)return null;
-  const c=S.clases.find(c=>c.fajaId===f.id&&c.sexo===want); return c?c.id:null;
+  const want=a.sexo==='M'?'varones':a.sexo==='F'?'damas':null;
+  const cl=S.clases.filter(c=>c.fajaId===f.id);
+  const c=(want&&cl.find(c=>c.sexo===want))||cl.find(c=>c.sexo==='mixta');
+  return c?c.id:null;
 }
 
 /* ---------- Estructura de la aplicación ---------- */
@@ -355,12 +358,12 @@ function marcas(dadas,total){
 /* ---------- Hoy ---------- */
 function vHoy(){
   if(!S.ciclo){
-    return `<h1>Bienvenido, ${esc(S.perfil.nombre.split(' ')[0])}</h1>`+(isGestor()
+    return `<h1>Bienvenido, ${esc(S.perfil.nombre.split(' ')[0])}</h1>`+bloquePendientes()+(isGestor()
       ?vacio('Todavía no hay un ciclo en marcha','Empieza creando el ciclo de la revista actual.',`<div class="acciones" style="justify-content:center"><button class="btn" data-act="ir" data-v="ciclo">Crear ciclo</button></div>`)
       :vacio('La escuela aún no tiene un ciclo en marcha','Cuando el superintendente lo cree, aparecerá aquí tu clase.'));
   }
   const c=S.ciclo,dadas=c.leccionesDadas||0,tot=c.totalLecciones;
-  let h=`<h1>${esc(c.nombre)}</h1><p class="muted">${dadas===0?'Ninguna lección dada todavía.':`Van ${dadas} de ${tot} lecciones.`} Ciclo iniciado el ${fmtF(c.fechaInicio)}.</p>${marcas(dadas,tot)}`;
+  let h=`<h1>${esc(c.nombre)}</h1><p class="muted">${dadas===0?'Ninguna lección dada todavía.':`Van ${dadas} de ${tot} lecciones.`}${dadas<tot?` La próxima es la lección ${dadas+1}.`:''} Ciclo iniciado el ${fmtF(c.fechaInicio)}.</p>${marcas(dadas,tot)}`;
   if(!isGestor()){
     const mc=misClases();
     if(!mc.length)return h+vacio('Aún no tienes una clase asignada','El administrador debe agregarte al equipo de profesores de tu clase.');
@@ -384,7 +387,7 @@ function vHoy(){
     [S.clases.length>0&&conRev===S.clases.length,`Clases con revista y lecciones completas: ${conRev} de ${S.clases.length}`,'clases',true],
     [act.length>0&&!sinC.length,act.length?`Alumnos con clase: ${act.length-sinC.length} de ${act.length}`:'Todavía no hay alumnos registrados','alumnos',true]
   ];
-  return h+`<div class="bloque"><h2>Preparación del ciclo</h2>`+items.filter(i=>i[3]).map(i=>
+  return h+bloquePendientes()+`<div class="bloque"><h2>Preparación del ciclo</h2>`+items.filter(i=>i[3]).map(i=>
     `<button class="fila" data-act="ir" data-v="${i[2]}"><span class="estado"><span class="pt ${i[0]?'ok':''}">${i[0]?'✓':''}</span><span>${esc(i[1])}</span></span></button>`).join('')
     +`</div><p class="muted small">Abrir la escuela cada domingo, pasar lista y los resúmenes llegan en las siguientes etapas.</p>`;
 }
@@ -583,17 +586,15 @@ function abrirClase(id){
 function vClase(){
   const e=S.edit; if(!e)return vClases();
   const fajas=S.ciclo.fajasSnap||[],f=fajas.find(x=>x.id===e.fajaId);
-  const sexoSel=f&&f.separaSexo
-    ?`<select id="c_sexo"><option value="">Elegir</option><option value="varones" ${e.sexo==='varones'?'selected':''}>Varones</option><option value="damas" ${e.sexo==='damas'?'selected':''}>Damas</option></select>`
-    :`<select id="c_sexo" disabled><option value="mixta">Mixta (varones y damas)</option></select>`;
+  const sexoSel=`<select id="c_sexo"><option value="mixta" ${e.sexo!=='varones'&&e.sexo!=='damas'?'selected':''}>Mixta (varones y damas)</option><option value="damas" ${e.sexo==='damas'?'selected':''}>Solo damas</option><option value="varones" ${e.sexo==='varones'?'selected':''}>Solo varones</option></select>`;
   const eq=e.equipo||[];
   const lleno=e.lecciones.filter(l=>l.titulo).length;
   return `<button class="link" data-act="ir" data-v="clases">Volver a clases</button>
   <h1>${e.id?esc(e.nombre||'Clase'):'Nueva clase'}</h1>
   <section class="bloque"><h2>Datos de la clase</h2>
     <label for="c_nombre">Nombre de la clase</label><input id="c_nombre" value="${esc(e.nombre)}" placeholder="Por ejemplo: Los Valientes">
-    <div class="grid2"><div><label for="c_faja">Faja de edad</label><select id="c_faja" data-chg="clasefaja"><option value="">Elegir</option>${fajas.map(x=>`<option value="${x.id}" ${x.id===e.fajaId?'selected':''}>${esc(x.nombre)} (${rangoTxt(x)})</option>`).join('')}</select></div>
-    <div><label for="c_sexo">Alumnos de la clase</label>${sexoSel}</div></div></section>
+    <div class="grid2"><div><label for="c_faja">Faja de edad</label><select id="c_faja"><option value="">Elegir</option>${fajas.map(x=>`<option value="${x.id}" ${x.id===e.fajaId?'selected':''}>${esc(x.nombre)} (${rangoTxt(x)})</option>`).join('')}</select></div>
+    <div><label for="c_sexo">¿Para quién es la clase?</label>${sexoSel}</div></div></section>
   <section class="bloque"><h2>Profesores del ciclo</h2>
     <p class="muted small">Se turnan en este orden para dar la clase. Marca en «Próximo» a quién le toca.</p>
     ${eq.length?`<ul class="lista">${eq.map((p,i)=>`<li class="fila"><span><span class="t">${i+1}. ${esc(p.nombre)}</span> ${(e.turno||0)%eq.length===i?'<span class="chip">Próximo</span>':''}<br><span class="s">${p.uid?'Con acceso al sistema':'Sin acceso al sistema'}</span></span>
@@ -625,8 +626,7 @@ async function guardarClase(){
   syncClase(); const e=S.edit; const f=(S.ciclo.fajasSnap||[]).find(x=>x.id===e.fajaId);
   if(!e.nombre)return toast('Falta el nombre de la clase.',1);
   if(!f)return toast('Elige la faja de edad.',1);
-  if(f.separaSexo&&!['varones','damas'].includes(e.sexo))return toast('Elige si la clase es de varones o de damas.',1);
-  if(!f.separaSexo)e.sexo='mixta';
+  if(!['varones','damas','mixta'].includes(e.sexo))return toast('Elige para quién es la clase.',1);
   const eqN=(e.equipo||[]).length; const data={cicloId:S.ciclo.id,nombre:e.nombre,fajaId:e.fajaId,sexo:e.sexo,equipo:e.equipo||[],turno:eqN?(e.turno||0)%eqN:0,
     secretario:e.secretario||null,revista:e.revista,lecciones:e.lecciones};
   cargando(true);
@@ -650,12 +650,12 @@ function vCiclo(){
   if(S.ciclo){
     const c=S.ciclo,dadas=c.leccionesDadas||0;
     h+=`<p><strong>${esc(c.nombre)}</strong></p><p class="muted">Inició el ${fmtF(c.fechaInicio)}. Termina cuando se dé la lección ${c.totalLecciones}, sin importar cuántos meses tome.</p>${marcas(dadas,c.totalLecciones)}
-    <p class="muted small">${dadas} de ${c.totalLecciones} lecciones dadas.</p>
+    <p class="muted small">${dadas} de ${c.totalLecciones} lecciones dadas.${dadas<c.totalLecciones?` La próxima es la lección ${dadas+1}.`:' Ya se dieron todas.'}</p>
     <div class="bloque"><h2>Reglas de este ciclo</h2><ul class="lista">
       <li class="fila"><span>Frecuencia mínima para el regalo</span><strong>${(c.evaluacion||S.cfg).frecuenciaMin}%</strong></li>
       <li class="fila"><span>Puntaje mínimo</span><strong>${(c.evaluacion||S.cfg).puntajeMin} de 100</strong></li></ul>
       <p class="muted small">Las fajas y los criterios de evaluación quedan fijos durante el ciclo. Los cambios que hagas en Ajustes rigen desde el próximo ciclo.</p></div>`;
-    if(isAdmin())h+=`<div class="acciones"><button class="btn dng" data-act="ciclocerrar">Cerrar ciclo</button></div>`;
+    if(isAdmin())h+=`<div class="acciones"><button class="btn sec" data-act="ciclolecc">Corregir lecciones dadas</button><button class="btn dng" data-act="ciclocerrar">Cerrar ciclo</button></div>`;
     return h;
   }
   const activas=S.fajas.filter(f=>f.activa!==false),prev=[...S.ciclos].filter(c=>c.estado==='cerrado').pop();
@@ -665,8 +665,10 @@ function vCiclo(){
   return h+`<p class="muted">No hay un ciclo en marcha. Al crearlo se guarda una copia de las fajas y de los criterios de evaluación actuales.</p>
   ${av.length?`<div class="aviso mal"><strong>Revisa las fajas antes de empezar</strong><ul>${av.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
   <label for="n_nom">Nombre del ciclo</label><input id="n_nom" placeholder="Por ejemplo: Ciclo 3, ${new Date().getFullYear()}">
-  <div class="grid2"><div><label for="n_fecha">Fecha de la primera sesión</label><input id="n_fecha" type="date" value="${hoyISO()}"></div>
+  <div class="grid2"><div><label for="n_fecha">Fecha en que se dio la lección 1</label><input id="n_fecha" type="date" value="${hoyISO()}"></div>
   <div><label for="n_tot">Cantidad de lecciones</label><input id="n_tot" type="number" min="1" max="30" value="13"></div></div>
+  <label for="n_dadas">Lecciones que ya se dieron <span class="opt">(si el ciclo ya empezó)</span></label><input id="n_dadas" type="number" min="0" max="30" value="0">
+  <p class="muted small" style="margin-top:.3rem">Si la próxima lección que se va a dar es la 5, escribe 4.</p>
   ${prev?`<div class="check"><input type="checkbox" id="n_copia" checked><label for="n_copia">Copiar clases y profesores del ciclo anterior (${esc(prev.nombre)})</label></div>`:''}
   <div class="acciones"><button class="btn" data-act="cicloCrear">Crear ciclo</button></div>`;
 }
@@ -675,14 +677,16 @@ async function crearCiclo(){
   if(!nombre)return toast('Falta el nombre del ciclo.',1);
   if(!fecha)return toast('Falta la fecha de la primera sesión.',1);
   if(!(tot>=1&&tot<=30))return toast('La cantidad de lecciones debe estar entre 1 y 30.',1);
+  const dadas=parseInt($('n_dadas').value||'0',10);
+  if(isNaN(dadas)||dadas<0||dadas>tot)return toast('Las lecciones ya dadas deben estar entre 0 y '+tot+'.',1);
   const activas=S.fajas.filter(f=>f.activa!==false);
   if(validarFajas(activas).length&&!await confirmBox('Las fajas tienen avisos (superposiciones o huecos). ¿Crear el ciclo de todos modos?','Crear ciclo'))return;
   const prev=[...S.ciclos].filter(c=>c.estado==='cerrado').pop(),copia=$('n_copia')&&$('n_copia').checked&&prev;
   cargando(true);
   try{
     const ref=db.collection('ebd_ciclos').doc();
-    const snap=activas.map(f=>({id:f.id,nombre:f.nombre,edadMin:f.edadMin,edadMax:f.edadMax==null?null:f.edadMax,separaSexo:!!f.separaSexo}));
-    const data={nombre,fechaInicio:fecha,totalLecciones:tot,estado:'activo',leccionesDadas:0,fajasSnap:snap,evaluacion:JSON.parse(JSON.stringify(S.cfg)),creado:ts()};
+    const snap=activas.map(f=>({id:f.id,nombre:f.nombre,edadMin:f.edadMin,edadMax:f.edadMax==null?null:f.edadMax}));
+    const data={nombre,fechaInicio:fecha,totalLecciones:tot,estado:'activo',leccionesDadas:dadas,fajasSnap:snap,evaluacion:JSON.parse(JSON.stringify(S.cfg)),creado:ts()};
     await ref.set(data); let omitidas=0;
     if(copia){
       if(!S.alumnos.length)await cargarAlumnos();
@@ -701,6 +705,14 @@ async function crearCiclo(){
     render(); toast(copia?`Ciclo creado con las clases copiadas.${omitidas?' '+omitidas+' clases no se copiaron porque su faja ya no está activa.':''}`:'Ciclo creado.');
   }catch(e){toast('No se pudo crear el ciclo: '+e.message,1);}
   cargando(false);
+}
+function corregirLecciones(){
+  const c=S.ciclo;
+  openModal('Corregir lecciones dadas',`<p class="muted">Escribe cuántas lecciones ya se dieron en este ciclo. La próxima será la siguiente.</p><label for="cl_n">Lecciones dadas</label><input id="cl_n" type="number" min="0" max="${c.totalLecciones}" value="${c.leccionesDadas||0}">`,
+  [{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Guardar',fn:async()=>{
+    const n=parseInt($('cl_n').value,10); if(isNaN(n)||n<0||n>c.totalLecciones)return toast('Escribe un número entre 0 y '+c.totalLecciones+'.',1);
+    try{await db.collection('ebd_ciclos').doc(c.id).update({leccionesDadas:n});c.leccionesDadas=n;closeModal();render();toast('Lecciones actualizadas.');}catch(e){toast(e.message,1);}
+  }}]);
 }
 async function cerrarCiclo(){
   const c=S.ciclo,dadas=c.leccionesDadas||0;
@@ -724,33 +736,68 @@ function tFajas(){
   if(av.length)h+=`<div class="aviso mal"><strong>Conviene revisar</strong><ul>${av.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`;
   else if(act.length)h+=`<div class="aviso">Las fajas activas cubren las edades sin superposiciones ni huecos.</div>`;
   if(!S.fajas.length)return h+vacio('Aún no hay fajas','Crea la primera. Por ejemplo: 4 a 6 años.');
-  return h+`<ul class="lista">`+S.fajas.map(f=>`<li><button class="fila" data-act="fjedit" data-id="${f.id}"><span><span class="t">${esc(f.nombre)}</span><br><span class="s">${rangoTxt(f)}${f.separaSexo?'. Damas y varones por separado':''}</span></span>${f.activa===false?'<span class="chip mal">Inactiva</span>':'<span class="chip ok">Activa</span>'}</button></li>`).join('')+'</ul>';
+  return h+`<ul class="lista">`+S.fajas.map(f=>`<li><button class="fila" data-act="fjedit" data-id="${f.id}"><span><span class="t">${esc(f.nombre)}</span><br><span class="s">${rangoTxt(f)}</span></span>${f.activa===false?'<span class="chip mal">Inactiva</span>':'<span class="chip ok">Activa</span>'}</button></li>`).join('')+'</ul>';
 }
 function modalFaja(id){
-  const f=id?S.fajas.find(x=>x.id===id):{nombre:'',edadMin:'',edadMax:null,separaSexo:false,activa:true};
+  const f=id?S.fajas.find(x=>x.id===id):{nombre:'',edadMin:'',edadMax:null,activa:true};
   openModal(id?'Editar faja':'Nueva faja',`<label for="f_nom">Nombre de la faja</label><input id="f_nom" value="${esc(f.nombre)}" placeholder="Por ejemplo: Faja 1, o Adultos">
   <div class="grid2"><div><label for="f_min">Edad desde</label><input id="f_min" type="number" min="0" max="120" value="${f.edadMin}"></div>
   <div><label for="f_max">Edad hasta <span class="opt">(vacío = en adelante)</span></label><input id="f_max" type="number" min="0" max="120" value="${f.edadMax==null?'':f.edadMax}"></div></div>
-  <div class="check"><input type="checkbox" id="f_sex" ${f.separaSexo?'checked':''}><label for="f_sex">Separar en clase de damas y de varones</label></div>
   <div class="check"><input type="checkbox" id="f_act" ${f.activa!==false?'checked':''}><label for="f_act">Faja activa</label></div>`,
-  [{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Guardar faja',fn:()=>guardarFaja(id)}]);
+  btnsFaja(id));
+}
+function btnsFaja(id){
+  const b=[{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Guardar faja',fn:()=>guardarFaja(id)}];
+  if(id&&isAdmin())b.unshift({label:'Eliminar',cls:'dng',fn:()=>eliminarFaja(id)});
+  return b;
+}
+async function eliminarFaja(id){
+  if(S.ciclos.some(c=>(c.fajasSnap||[]).some(f=>f.id===id)))return toast('Esta faja ya se usó en un ciclo. Desactívala en lugar de eliminarla, para no perder el historial.',1);
+  if(!await confirmBox('¿Eliminar esta faja? No se puede deshacer.','Eliminar',true))return;
+  try{await db.collection('ebd_fajas').doc(id).delete();S.fajas=S.fajas.filter(f=>f.id!==id);closeModal();render();toast('Faja eliminada.');}catch(e){toast(e.message,1);}
 }
 async function guardarFaja(id){
   const nombre=$('f_nom').value.trim(),min=parseInt($('f_min').value,10),mx=$('f_max').value.trim()===''?null:parseInt($('f_max').value,10);
   if(!nombre)return toast('Falta el nombre de la faja.',1);
   if(isNaN(min)||min<0)return toast('Escribe la edad desde la que empieza la faja.',1);
   if(mx!==null&&(isNaN(mx)||mx<min))return toast('La edad final no puede ser menor que la inicial.',1);
-  const d={nombre,edadMin:min,edadMax:mx,separaSexo:$('f_sex').checked,activa:$('f_act').checked};
+  const d={nombre,edadMin:min,edadMax:mx,activa:$('f_act').checked};
   try{
     if(id){await db.collection('ebd_fajas').doc(id).update(d);const i=S.fajas.findIndex(x=>x.id===id);S.fajas[i]={id,...d};}
     else{const r=await db.collection('ebd_fajas').add({...d,creado:ts()});S.fajas.push({id:r.id,...d});}
     S.fajas.sort((a,b)=>a.edadMin-b.edadMin);closeModal();render();toast('Faja guardada.');
   }catch(e){toast(e.message,1);}
 }
+function bloquePendientes(){
+  if(!isGestor()||!S.pendientes.length)return '';
+  return `<div class="aviso"><strong>Piden acceso</strong>${S.pendientes.map(p=>`<div class="fila" style="border:none"><span>${esc(p.email)}</span><span style="display:flex;gap:.4rem"><button class="btn small" data-act="usdar" data-id="${p.id}">Dar acceso</button><button class="btn dng small" data-act="usrechazar" data-id="${p.id}">Rechazar</button></span></div>`).join('')}</div>`;
+}
 function tUsuarios(){
-  let h=`<p class="muted">Cada persona entra con su correo y contraseña. El rol decide qué ve.</p><div class="acciones"><button class="btn" data-act="usnuevo">Nuevo usuario</button></div>`;
-  if(S.pendientes.length)h+=`<div class="aviso"><strong>Piden acceso</strong>${S.pendientes.map(p=>`<div class="fila" style="border:none"><span>${esc(p.email)}</span><button class="btn small" data-act="usdar" data-id="${p.id}">Dar acceso</button></div>`).join('')}</div>`;
-  return h+`<ul class="lista">`+S.usuarios.map(u=>`<li><button class="fila" data-act="usedit" data-id="${u.id}"><span><span class="t">${esc(u.nombre)}</span><br><span class="s">${esc(u.email||'')}. ${ROLES[u.rol]||u.rol}</span></span>${u.activo===false?'<span class="chip mal">Desactivado</span>':''}</button></li>`).join('')+'</ul>';
+  const inact=S.usuarios.filter(u=>u.activo===false).length,lista=S.usuarios.filter(u=>S.verInact||u.activo!==false);
+  let h=`<p class="muted">Cada persona entra con su correo y contraseña. El rol decide qué ve. Un usuario desactivado ya no puede entrar.</p><div class="acciones"><button class="btn" data-act="usnuevo">Nuevo usuario</button></div>`+bloquePendientes();
+  h+=`<ul class="lista">`+lista.map(u=>`<li><button class="fila" data-act="usedit" data-id="${u.id}"><span><span class="t">${esc(u.nombre)}</span><br><span class="s">${esc(u.email||'')}. ${ROLES[u.rol]||u.rol}</span></span>${u.activo===false?'<span class="chip mal">Desactivado</span>':''}</button></li>`).join('')+'</ul>';
+  if(inact)h+=`<div class="acciones"><button class="btn sec small" data-act="usinact">${S.verInact?'Ocultar':'Mostrar'} desactivados (${inact})</button></div>`;
+  return h;
+}
+function checksClases(u){
+  if(!S.ciclo||!S.clases.length)return '';
+  const ya=c=>u&&(c.equipo||[]).some(e=>e.uid===u.id||(!e.uid&&normTxt(e.nombre)===normTxt(u.nombre)));
+  return `<div style="font-weight:600;margin:.9rem 0 .2rem">Clases que dará <span class="opt" style="font-weight:400;color:var(--muted)">(opcional)</span></div><p class="muted small" style="margin:0 0 .3rem">También puedes asignarlo después desde Clases.</p>`
+    +S.clases.map(c=>`<div class="check"><input type="checkbox" class="u_cl" id="ucl_${c.id}" value="${c.id}" ${ya(c)?'checked':''}><label for="ucl_${c.id}">${esc(c.nombre)}</label></div>`).join('');
+}
+const clasesMarcadas=()=>[...document.querySelectorAll('.u_cl:checked')].map(x=>x.value);
+async function sincronizarEquipos(uid,nombre,sel,soloAgregar){
+  if(!S.ciclo)return;
+  const b=db.batch();let n=0;
+  S.clases.forEach(c=>{
+    const eq=c.equipo||[],i=eq.findIndex(e=>e.uid===uid||(!e.uid&&normTxt(e.nombre)===normTxt(nombre))),quiere=sel.includes(c.id);
+    let nuevo=null,t=c.turno||0;
+    if(quiere&&i<0)nuevo=[...eq,{id:uid8(),nombre,uid}];
+    else if(quiere&&(eq[i].uid!==uid||eq[i].nombre!==nombre))nuevo=eq.map((e,k)=>k===i?{...e,nombre,uid}:e);
+    else if(!quiere&&i>=0&&!soloAgregar){nuevo=eq.filter((_,k)=>k!==i);if(i<t)t--;}
+    if(nuevo){t=nuevo.length?Math.max(0,t)%nuevo.length:0;b.update(db.collection('ebd_clases').doc(c.id),{equipo:nuevo,turno:t});c.equipo=nuevo;c.turno=t;n++;}
+  });
+  if(n)await b.commit();
 }
 function modalUsuario(id){
   const u=id?S.usuarios.find(x=>x.id===id):{nombre:'',email:'',rol:'profesor',activo:true},yo=id===S.user.uid;
@@ -759,41 +806,51 @@ function modalUsuario(id){
   ${id?`<p class="muted small" style="margin-top:.5rem">${esc(u.email||'')}</p>`:`<label for="u_mail">Correo</label><input id="u_mail" type="email" inputmode="email">
   <label for="u_pass">Contraseña temporal <span class="opt">(mínimo 6 caracteres)</span></label><input id="u_pass" type="text" autocomplete="off">`}
   <label for="u_rol">Rol</label><select id="u_rol" ${yo?'disabled':''}>${roles}</select>
-  ${id?`<div class="check"><input type="checkbox" id="u_act" ${u.activo!==false?'checked':''} ${yo?'disabled':''}><label for="u_act">Usuario activo</label></div>`:''}`;
+  ${id?`<div class="check"><input type="checkbox" id="u_act" ${u.activo!==false?'checked':''} ${yo?'disabled':''}><label for="u_act">Usuario activo</label></div>`:''}
+  ${checksClases(id?u:null)}`;
   const btns=[{label:'Cancelar',cls:'sec',fn:closeModal},{label:id?'Guardar usuario':'Crear usuario',fn:()=>guardarUsuario(id)}];
   if(id&&u.email)btns.unshift({label:'Enviar correo de nueva contraseña',cls:'sec',fn:async()=>{try{await auth.sendPasswordResetEmail(u.email);toast('Correo enviado.');}catch(e){toast(authErr(e),1);}}});
   openModal(id?'Editar usuario':'Nuevo usuario',body,btns);
 }
 async function guardarUsuario(id){
-  const nombre=$('u_nom').value.trim(),rol=$('u_rol').value; if(!nombre)return toast('Falta el nombre.',1);
+  const nombre=$('u_nom').value.trim(),rol=$('u_rol').value,sel=clasesMarcadas(); if(!nombre)return toast('Falta el nombre.',1);
   try{
     if(id){
       const d={nombre,rol:isAdmin()&&id===S.user.uid?'admin':rol,activo:id===S.user.uid?true:$('u_act').checked};
       await db.collection('ebd_usuarios').doc(id).update(d);const i=S.usuarios.findIndex(x=>x.id===id);S.usuarios[i]={...S.usuarios[i],...d};
       if(id===S.user.uid){S.perfil={...S.perfil,...d};}
+      await sincronizarEquipos(id,nombre,sel,false);
     }else{
       const email=$('u_mail').value.trim(),pass=$('u_pass').value; if(!email)return toast('Falta el correo.',1); if(pass.length<6)return toast('La contraseña debe tener al menos 6 caracteres.',1);
       cargando(true);
       const sec=firebase.apps.find(a=>a.name==='sec')||firebase.initializeApp(FIREBASE_CONFIG,'sec');
       let cred;
       try{cred=await sec.auth().createUserWithEmailAndPassword(email,pass);}
-      catch(e){cargando(false);if(e.code==='auth/email-already-in-use')return toast('Ese correo ya tiene cuenta (por ejemplo, la de tesorería). Pídele que entre una vez a este sistema y aparecerá en «Piden acceso».',1);throw e;}
+      catch(e){cargando(false);if(e.code==='auth/email-already-in-use')return toast('Ese correo ya tiene cuenta. Pídele que entre una vez a este sistema y aparecerá en «Piden acceso».',1);throw e;}
       await sec.auth().signOut();
       const d={nombre,email,rol,activo:true,creado:ts()};
       await db.collection('ebd_usuarios').doc(cred.user.uid).set(d);
-      S.usuarios.push({id:cred.user.uid,nombre,email,rol,activo:true});S.usuarios.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));cargando(false);
+      S.usuarios.push({id:cred.user.uid,nombre,email,rol,activo:true});S.usuarios.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+      await sincronizarEquipos(cred.user.uid,nombre,sel,true);cargando(false);
     }
     closeModal();render();toast('Usuario guardado.');
   }catch(e){cargando(false);toast(authErr(e),1);}
 }
 function modalDarAcceso(id){
-  const p=S.pendientes.find(x=>x.id===id);
-  openModal('Dar acceso',`<p class="muted">${esc(p.email)}</p><label for="u_nom">Nombre</label><input id="u_nom"><label for="u_rol">Rol</label><select id="u_rol">${Object.keys(ROLES).map(r=>`<option value="${r}" ${r==='profesor'?'selected':''}>${ROLES[r]}</option>`).join('')}</select>`,
+  const p=S.pendientes.find(x=>x.id===id),solo=!isAdmin();
+  const roles=(solo?['profesor']:Object.keys(ROLES)).map(r=>`<option value="${r}" ${r==='profesor'?'selected':''}>${ROLES[r]}</option>`).join('');
+  openModal('Dar acceso',`<p class="muted">${esc(p.email)}</p><label for="u_nom">Nombre</label><input id="u_nom"><label for="u_rol">Rol</label><select id="u_rol">${roles}</select>${checksClases(null)}`,
   [{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Dar acceso',fn:async()=>{
-    const nombre=$('u_nom').value.trim(),rol=$('u_rol').value; if(!nombre)return toast('Falta el nombre.',1);
+    const nombre=$('u_nom').value.trim(),rol=solo?'profesor':$('u_rol').value,sel=clasesMarcadas(); if(!nombre)return toast('Falta el nombre.',1);
     try{const b=db.batch();b.set(db.collection('ebd_usuarios').doc(id),{nombre,email:p.email,rol,activo:true,creado:ts()});b.delete(db.collection('ebd_pendientes').doc(id));await b.commit();
-      S.usuarios.push({id,nombre,email:p.email,rol,activo:true});S.pendientes=S.pendientes.filter(x=>x.id!==id);closeModal();render();toast('Acceso concedido.');}catch(e){toast(e.message,1);}
+      S.usuarios.push({id,nombre,email:p.email,rol,activo:true});S.pendientes=S.pendientes.filter(x=>x.id!==id);
+      await sincronizarEquipos(id,nombre,sel,true);closeModal();render();toast('Acceso concedido.');}catch(e){toast(e.message,1);}
   }}]);
+}
+async function rechazarPendiente(id){
+  const p=S.pendientes.find(x=>x.id===id);
+  if(!await confirmBox(`¿Rechazar la solicitud de ${p.email}? No podrá entrar a la EBD, aunque puede volver a pedirlo.`,'Rechazar',true))return;
+  try{await db.collection('ebd_pendientes').doc(id).delete();S.pendientes=S.pendientes.filter(x=>x.id!==id);render();toast('Solicitud rechazada.');}catch(e){toast(e.message,1);}
 }
 function tEval(){
   const c=S.cfg,p=c.pesos,campo=(k,t)=>`<div><label for="e_${k}">${t}</label><input id="e_${k}" type="number" min="0" max="100" value="${p[k]}"></div>`;
@@ -864,13 +921,15 @@ const acciones={
   usnuevo(){modalUsuario(null);},
   usedit(d){modalUsuario(d.id);},
   usdar(d){modalDarAcceso(d.id);},
+  usrechazar(d){rechazarPendiente(d.id);},
+  usinact(){S.verInact=!S.verInact;render();},
   cicloCrear(){crearCiclo();},
   ciclocerrar(){cerrarCiclo();},
+  ciclolecc(){corregirLecciones();},
   evalguardar(){guardarEval();}
 };
 const cambios={
-  filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();},
-  clasefaja(){syncClase();const e=S.edit,f=(S.ciclo.fajasSnap||[]).find(x=>x.id===e.fajaId);e.sexo=f&&f.separaSexo?(['varones','damas'].includes(e.sexo)?e.sexo:''):'mixta';render();}
+  filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();}
 };
 document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(t&&acciones[t.dataset.act]){e.preventDefault();acciones[t.dataset.act](t.dataset,t);}});
 document.addEventListener('change',e=>{const t=e.target.closest('[data-chg]');if(t&&cambios[t.dataset.chg])cambios[t.dataset.chg](t.dataset,t);});
