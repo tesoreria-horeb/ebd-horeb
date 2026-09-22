@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F1.6 -->
+<!-- VERSION: 2026-09-21-F2.0 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -147,7 +147,7 @@ const NAV = {
   profesor:[['hoy','Hoy'],['alumnos','Mi clase']]
 };
 const S = {user:null,perfil:null,cfg:CFG_DEF,fajas:[],ciclos:[],ciclo:null,clases:[],usuarios:[],pendientes:[],alumnos:[],
-  view:'hoy',param:null,ajTab:'fajas',fq:'',fclase:'',edit:null,lecOpen:false,verInact:false};
+  view:'hoy',param:null,ajTab:'fajas',fq:'',fclase:'',edit:null,lecOpen:false,verInact:false,sesiones:[],sesionHoy:null,sesionCerradaHoy:null,mapas:{},mapaEdit:null,mapaEditId:null,informe:null,freqClase:''};
 let db,auth;
 const $ = id => document.getElementById(id);
 const ts = () => firebase.firestore.FieldValue.serverTimestamp();
@@ -240,7 +240,7 @@ function pantallaLogin(modo){
     ${primer?`<label for="l_nom">Tu nombre</label><input id="l_nom" autocomplete="name">`:''}
     <label for="l_mail">Correo</label><input id="l_mail" type="email" autocomplete="username" inputmode="email">
     <label for="l_pass">Contraseña</label><input id="l_pass" type="password" autocomplete="${primer?'new-password':'current-password'}">
-    <div class="acciones"><button class="btn" data-act="${primer?'crearprimer':'entrar'}">${primer?'Crear administrador general':'Entrar'}</button></div>
+    <div class="acciones"><button class="btn" data-act="${primer?'crearprimer':'entrar'}">${primer?'Continuar':'Entrar'}</button></div>
     ${primer?`<p class="muted small">Solo sirve la primera vez, para crear al administrador general. Si el sistema ya tiene administrador, pídele que te dé acceso.</p><button class="link" data-act="modologin" data-m="normal">Volver a entrar</button>`
     :`<button class="link" data-act="olvide">Olvidé mi contraseña</button><br><button class="link" data-act="modologin" data-m="primer">Primer uso del sistema</button>`}
   </div></div>`;
@@ -294,6 +294,18 @@ async function cargarCiclo(){
   const cs=await db.collection('ebd_clases').where('cicloId','==',S.ciclo.id).get();
   S.clases=cs.docs.map(d=>({id:d.id,...d.data()})).sort(ordenClases);
   await cargarAlumnos();
+  await cargarSesionHoy();
+}
+async function cargarSesionHoy(){
+  S.sesiones=[];S.sesionHoy=null;S.mapas={};
+  const ss=await db.collection('ebd_sesiones').where('cicloId','==',S.ciclo.id).get();
+  S.sesiones=ss.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||''));
+  S.sesionHoy=S.sesiones.find(x=>x.estado==='abierta')||null;
+  if(S.sesionHoy)await cargarMapasSesion(S.sesionHoy.id);
+}
+async function cargarMapasSesion(sesionId){
+  const ms=await db.collection('ebd_mapas').where('sesionId','==',sesionId).get();
+  S.mapas={}; ms.docs.forEach(d=>S.mapas[d.data().claseId]={id:d.id,...d.data()});
 }
 async function cargarAlumnos(){
   if(isGestor()){
@@ -315,6 +327,164 @@ function ordenClases(a,b){
 const misClases = () => S.clases.filter(c=>(c.equipo||[]).some(e=>e.uid===S.user.uid)||(c.secretario&&c.secretario.uid===S.user.uid));
 const fajaDe = id => (S.ciclo&&(S.ciclo.fajasSnap||[]).find(f=>f.id===id))||S.fajas.find(f=>f.id===id)||null;
 const claseDe = a => S.clases.find(c=>c.id===a.claseId)||null;
+const alumnosDeClase = id => S.alumnos.filter(a=>a.claseId===id&&a.activo!==false);
+const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const mesDe = f => MESES[parseInt(f.slice(5,7),10)-1];
+const diaDe = f => parseInt(f.slice(8,10),10);
+
+/* ---------- Sesión del día (abrir/cerrar escuela y clases) ---------- */
+function estadoClaseHoy(claseId){
+  if(!S.sesionHoy)return null;
+  const m=S.mapas[claseId]; return m?m.estado:'sin_abrir';
+}
+async function abrirEscuela(fecha){
+  const dadas=S.ciclo.leccionesDadas||0;
+  if(dadas>=S.ciclo.totalLecciones)return toast('Este ciclo ya dio sus '+S.ciclo.totalLecciones+' lecciones. Cierra el ciclo o corrige el número en Ciclo.',1);
+  if(S.sesiones.some(x=>x.fecha===fecha))return toast('Ya existe una sesión con esa fecha.',1);
+  cargando(true);
+  try{
+    const data={cicloId:S.ciclo.id,fecha,leccionNumero:dadas+1,estado:'abierta',creado:ts()};
+    const r=await db.collection('ebd_sesiones').add(data);
+    const obj={id:r.id,...data}; S.sesiones.push(obj); S.sesionHoy=obj; S.mapas={};
+    render(); toast('Escuela abierta. Lección '+(dadas+1)+'.');
+  }catch(e){toast(e.message,1);}
+  cargando(false);
+}
+async function abrirClaseHoy(claseId){
+  const cl=S.clases.find(c=>c.id===claseId),eq=cl.equipo||[],prox=eq.length?eq[(cl.turno||0)%eq.length]:null;
+  const alumnos=alumnosDeClase(claseId),asistencia={}; alumnos.forEach(a=>asistencia[a.id]=false);
+  const tema=(cl.lecciones||[])[S.sesionHoy.leccionNumero-1]?.titulo||'';
+  const data={sesionId:S.sesionHoy.id,claseId,cicloId:S.ciclo.id,fecha:S.sesionHoy.fecha,leccionNumero:S.sesionHoy.leccionNumero,
+    profesorNombre:isGestor()?(prox?prox.nombre:''):S.perfil.nombre,temaDia:tema,estado:'abierta',
+    asistencia,visitantes:[],biblias:0,revistas:0,ofrenda:0,creado:ts(),actualizado:ts()};
+  cargando(true);
+  try{
+    const id=S.sesionHoy.id+'_'+claseId;
+    await db.collection('ebd_mapas').doc(id).set(data);
+    S.mapas[claseId]={id,...data}; abrirMapaEdit(claseId);
+  }catch(e){toast(e.message,1);}
+  cargando(false);
+}
+function abrirMapaEdit(claseId){S.mapaEditId=claseId;S.mapaEdit=JSON.parse(JSON.stringify(S.mapas[claseId]));go('mapa',claseId);}
+function syncMapa(){
+  const m=S.mapaEdit; if(!m||!$('m_prof'))return;
+  m.profesorNombre=$('m_prof').value.trim(); m.temaDia=$('m_tema').value.trim();
+  m.biblias=parseInt($('m_bib').value,10)||0; m.revistas=parseInt($('m_rev').value,10)||0; m.ofrenda=parseFloat($('m_ofr').value)||0;
+}
+async function guardarMapa(cerrar){
+  syncMapa(); const m=S.mapaEdit;
+  if(cerrar&&!m.profesorNombre)return toast('Escribe quién dio la clase.',1);
+  const cl=S.clases.find(c=>c.id===m.claseId),eq=cl.equipo||[],prox=eq.length?eq[(cl.turno||0)%eq.length]:null;
+  const d={profesorNombre:m.profesorNombre,temaDia:m.temaDia,biblias:m.biblias,revistas:m.revistas,ofrenda:m.ofrenda,
+    asistencia:m.asistencia,visitantes:m.visitantes,actualizado:ts()};
+  if(cerrar){
+    d.estado='cerrada'; d.cerradoFecha=hoyISO();
+    d.sustituto=!!(prox&&normTxt(prox.nombre)!==normTxt(m.profesorNombre));
+  }
+  cargando(true);
+  try{
+    await db.collection('ebd_mapas').doc(m.id).update(d);
+    S.mapas[m.claseId]={...S.mapas[m.claseId],...d};
+    if(cerrar){
+      const nt=eq.length?((cl.turno||0)+1)%eq.length:0;
+      if(eq.length&&normTxt(prox.nombre)===normTxt(m.profesorNombre))await db.collection('ebd_clases').doc(cl.id).update({turno:nt});
+      if(eq.length&&normTxt(prox.nombre)===normTxt(m.profesorNombre))cl.turno=nt;
+      cargando(false); go('hoy'); toast('Clase cerrada.'); return;
+    }
+    cargando(false); S.mapaEdit=JSON.parse(JSON.stringify(S.mapas[m.claseId])); render(); toast('Guardado.');
+  }catch(e){cargando(false);toast(e.message,1);}
+}
+async function marcarSinClase(claseId){
+  if(!await confirmBox('¿Marcar esta clase como «sin clase» hoy? Sus alumnos no tendrán falta ni asistencia esta sesión.','Marcar'))return;
+  const data={sesionId:S.sesionHoy.id,claseId,cicloId:S.ciclo.id,fecha:S.sesionHoy.fecha,leccionNumero:S.sesionHoy.leccionNumero,
+    profesorNombre:'',temaDia:'',estado:'sin_clase',asistencia:{},visitantes:[],biblias:0,revistas:0,ofrenda:0,creado:ts(),actualizado:ts()};
+  cargando(true);
+  try{const id=S.sesionHoy.id+'_'+claseId;await db.collection('ebd_mapas').doc(id).set(data);S.mapas[claseId]={id,...data};render();toast('Marcada sin clase.');}
+  catch(e){toast(e.message,1);}
+  cargando(false);
+}
+function todasResueltas(){return S.clases.every(c=>['cerrada','sin_clase'].includes(estadoClaseHoy(c.id)));}
+async function cerrarEscuela(){
+  if(!todasResueltas())return toast('Todavía hay clases sin cerrar o sin marcar «sin clase».',1);
+  if(!await confirmBox('¿Cerrar la escuela? Se contará la lección '+S.sesionHoy.leccionNumero+' como dada.','Cerrar escuela'))return;
+  cargando(true);
+  try{
+    const b=db.batch(),nuevas=(S.ciclo.leccionesDadas||0)+1;
+    b.update(db.collection('ebd_sesiones').doc(S.sesionHoy.id),{estado:'cerrada',cerradoFecha:ts()});
+    b.update(db.collection('ebd_ciclos').doc(S.ciclo.id),{leccionesDadas:nuevas});
+    await b.commit();
+    S.ciclo.leccionesDadas=nuevas; S.sesionHoy.estado='cerrada'; S.sesionCerradaHoy=S.sesionHoy; S.sesionHoy=null;
+    await irInforme(S.sesionCerradaHoy.id);
+  }catch(e){cargando(false);toast(e.message,1);}
+}
+async function irInforme(sesionId){
+  cargando(true);
+  try{S.informe=await computeInforme(sesionId);cargando(false);go('informe',sesionId);}
+  catch(e){cargando(false);toast(e.message,1);}
+}
+async function computeInforme(sesionId){
+  const sesion=S.sesiones.find(x=>x.id===sesionId)||S.sesionCerradaHoy;
+  const ms=await db.collection('ebd_mapas').where('sesionId','==',sesionId).get();
+  const porClase={}; ms.docs.forEach(d=>porClase[d.data().claseId]=d.data());
+  const filas=S.clases.map(cl=>{
+    const m=porClase[cl.id];
+    if(!m||m.estado==='sin_clase')return {clase:cl,sinClase:true};
+    const mat=Object.keys(m.asistencia||{}).length,pres=Object.values(m.asistencia||{}).filter(v=>v).length;
+    return {clase:cl,sinClase:false,matriculados:mat,ausentes:mat-pres,presentes:pres,visitantes:(m.visitantes||[]).length,
+      total:pres+(m.visitantes||[]).length,biblias:m.biblias||0,revistas:m.revistas||0,ofrenda:m.ofrenda||0};
+  });
+  const sumar=campo=>filas.filter(f=>!f.sinClase).reduce((a,f)=>a+f[campo],0);
+  const totalGeneral={matriculados:sumar('matriculados'),ausentes:sumar('ausentes'),presentes:sumar('presentes'),visitantes:sumar('visitantes'),
+    total:sumar('total'),biblias:sumar('biblias'),revistas:sumar('revistas'),ofrenda:sumar('ofrenda')};
+  const previa=[...S.sesiones].filter(x=>x.estado==='cerrada'&&x.fecha<sesion.fecha).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
+  let anterior=null;
+  if(previa){
+    const ms2=await db.collection('ebd_mapas').where('sesionId','==',previa.id).get();
+    const filas2=ms2.docs.map(d=>d.data()).filter(m=>m.estado!=='sin_clase').map(m=>{
+      const mat=Object.keys(m.asistencia||{}).length,pres=Object.values(m.asistencia||{}).filter(v=>v).length;
+      return {matriculados:mat,ausentes:mat-pres,presentes:pres,visitantes:(m.visitantes||[]).length,total:pres+(m.visitantes||[]).length,biblias:m.biblias||0,revistas:m.revistas||0,ofrenda:m.ofrenda||0};
+    });
+    const s2=c=>filas2.reduce((a,f)=>a+f[c],0);
+    anterior={fecha:previa.fecha,matriculados:s2('matriculados'),ausentes:s2('ausentes'),presentes:s2('presentes'),visitantes:s2('visitantes'),total:s2('total'),biblias:s2('biblias'),revistas:s2('revistas'),ofrenda:s2('ofrenda')};
+  }
+  return {sesion,filas,totalGeneral,anterior};
+}
+async function irFrecuencia(claseId){
+  cargando(true);
+  try{S.freqClase=claseId;S.freqData=await computeFrecuencia(claseId);cargando(false);go('frecuencia',claseId);}
+  catch(e){cargando(false);toast(e.message,1);}
+}
+async function computeFrecuencia(claseId){
+  const ms=await db.collection('ebd_mapas').where('cicloId','==',S.ciclo.id).where('claseId','==',claseId).get();
+  const mapas=ms.docs.map(d=>d.data()).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const alumnos=alumnosDeClase(claseId).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+  const gruposObj={}; mapas.forEach(m=>{const mm=mesDe(m.fecha);(gruposObj[mm]=gruposObj[mm]||[]).push(m);});
+  const meses=Object.keys(gruposObj).map(nombre=>({nombre,sesiones:gruposObj[nombre]}));
+  const filas=alumnos.map(al=>{
+    const celdas=mapas.map(m=>m.estado==='sin_clase'?null:!!(m.asistencia&&m.asistencia[al.id]));
+    const total=celdas.filter(c=>c===true).length;
+    return {alumno:al,celdas,total};
+  });
+  const porMes=(campo)=>meses.map(g=>g.sesiones.filter(m=>m.estado!=='sin_clase').reduce((a,m)=>{
+    if(campo==='ausentes')return a+(Object.keys(m.asistencia||{}).length-Object.values(m.asistencia||{}).filter(v=>v).length);
+    if(campo==='presentes')return a+Object.values(m.asistencia||{}).filter(v=>v).length;
+    if(campo==='visitantes')return a+(m.visitantes||[]).length;
+    return a;
+  },0));
+  const matriculadosPorMes=meses.map(g=>{const ids=new Set();g.sesiones.forEach(m=>{if(m.estado!=='sin_clase')Object.keys(m.asistencia||{}).forEach(id=>ids.add(id));});return ids.size;});
+  const footer={
+    matriculados:matriculadosPorMes,
+    ausentes:porMes('ausentes'), presentes:porMes('presentes'), visitantes:porMes('visitantes'),
+    biblias:meses.map(g=>g.sesiones.filter(m=>m.estado!=='sin_clase').reduce((a,m)=>a+(m.biblias||0),0)),
+    revistas:meses.map(g=>g.sesiones.filter(m=>m.estado!=='sin_clase').reduce((a,m)=>a+(m.revistas||0),0)),
+    ofrendas:meses.map(g=>g.sesiones.filter(m=>m.estado!=='sin_clase').reduce((a,m)=>a+(m.ofrenda||0),0))
+  };
+  footer.totalAsist=footer.presentes.map((p,i)=>p+footer.visitantes[i]);
+  const sumaFila=arr=>arr.reduce((a,b)=>a+b,0);
+  const totales={matriculados:sumaFila(footer.matriculados)?Math.max(...footer.matriculados):0,ausentes:sumaFila(footer.ausentes),presentes:sumaFila(footer.presentes),
+    visitantes:sumaFila(footer.visitantes),totalAsist:sumaFila(footer.totalAsist),biblias:sumaFila(footer.biblias),revistas:sumaFila(footer.revistas),ofrendas:sumaFila(footer.ofrendas)};
+  return {mapas,meses,filas,footer,totales};
+}
 
 /* ---------- Reglas de fajas y edades ---------- */
 function rangoTxt(f){return f.edadMax==null?`${f.edadMin} años en adelante`:`${f.edadMin} a ${f.edadMax} años`;}
@@ -362,6 +532,9 @@ function vista(){
     case 'clase':return vClase();
     case 'ciclo':return vCiclo();
     case 'ajustes':return vAjustes();
+    case 'mapa':return vMapa();
+    case 'informe':return vInforme();
+    case 'frecuencia':return vFrecuencia();
   }
   return '';
 }
@@ -379,17 +552,38 @@ function vHoy(){
   }
   const c=S.ciclo,dadas=c.leccionesDadas||0,tot=c.totalLecciones;
   let h=`<h1>${esc(c.nombre)}</h1><p class="muted">${dadas===0?'Ninguna lección dada todavía.':`Van ${dadas} de ${tot} lecciones.`}${dadas<tot?` La próxima es la lección ${dadas+1}.`:''} Ciclo iniciado el ${fmtF(c.fechaInicio)}.</p>${marcas(dadas,tot)}`;
+  h+=bloquePendientes();
   if(!isGestor()){
     const mc=misClases();
     if(!mc.length)return h+vacio('Aún no tienes una clase asignada','El administrador debe agregarte al equipo de profesores de tu clase.');
-    return h+`<div class="bloque"><h2>Tu clase</h2>`+mc.map(cl=>{
-      const eq=cl.equipo||[],prox=eq.length?eq[(cl.turno||0)%eq.length]:null;
-      return `<div class="fila" style="display:block"><div class="t">${esc(cl.nombre)}</div>
-        <div class="s">${esc((fajaDe(cl.fajaId)||{}).nombre||'')}${cl.sexo!=='mixta'?', '+sexoTxt(cl.sexo):''}</div>
-        <p class="small" style="margin-top:.4rem">${prox?`Le toca dar la clase a <strong>${esc(prox.nombre)}</strong>.`:'Sin profesores en el equipo.'}</p>
-        <p class="small muted">${cl.revista&&cl.revista.nombre?'Revista: '+esc(cl.revista.nombre)+(cl.revista.temaCentral?'. Tema central: '+esc(cl.revista.temaCentral):''):'Revista sin registrar.'}</p></div>`;}).join('')
-      +`<div class="acciones"><button class="btn sec" data-act="ir" data-v="alumnos">Ver alumnos</button></div></div>
-      <p class="muted small">Abrir la clase y pasar lista estará disponible en la siguiente etapa.</p>`;
+    if(!S.sesionHoy){
+      if(S.sesionCerradaHoy&&S.sesionCerradaHoy.fecha===hoyISO())h+=`<div class="aviso">Ya se cerró la escuela de hoy. <button class="link" data-act="verinformehoy">Ver el informe</button></div>`;
+      return h+`<div class="bloque"><h2>Tu clase</h2>`+mc.map(clHoyCard).join('')+`</div>
+      <p class="muted small">La escuela todavía no está abierta hoy. Espera a que el superintendente la abra.</p>`;
+    }
+    return h+`<div class="bloque"><h2>Hoy: lección ${S.sesionHoy.leccionNumero}</h2>`+mc.map(cl=>{
+      const est=estadoClaseHoy(cl.id);
+      if(est==='sin_abrir')return `<div class="fila" style="display:block"><div class="t">${esc(cl.nombre)}</div><div class="acciones"><button class="btn" data-act="mapabrir" data-id="${cl.id}">Abrir mi clase</button></div></div>`;
+      if(est==='abierta')return `<div class="fila" style="display:block"><div class="t">${esc(cl.nombre)}</div><div class="s">Pasando lista…</div><div class="acciones"><button class="btn" data-act="mapaeditar" data-id="${cl.id}">Continuar</button></div></div>`;
+      const m=S.mapas[cl.id];
+      return `<div class="fila" style="display:block"><div class="t">${esc(cl.nombre)}</div><div class="s">Clase cerrada. ${Object.values(m.asistencia||{}).filter(v=>v).length} presentes, S/ ${(m.ofrenda||0).toFixed(2)} de ofrenda.</div></div>`;
+    }).join('')+`</div>`;
+  }
+  if(!S.sesionHoy){
+    h+=`<div class="bloque"><h2>Abrir la escuela</h2>
+    ${S.sesionCerradaHoy&&S.sesionCerradaHoy.fecha===hoyISO()?`<div class="aviso">Ya se cerró la escuela de hoy. <button class="link" data-act="verinformehoy">Ver el informe</button></div>`:''}
+    <label for="ae_fecha">Fecha de la sesión</label><input id="ae_fecha" type="date" value="${hoyISO()}">
+    <p class="muted small">Se va a dar la lección ${(c.leccionesDadas||0)+1} de ${c.totalLecciones}.</p>
+    <div class="acciones"><button class="btn" data-act="escuelaabrir">Abrir escuela</button></div></div>`;
+  }else{
+    h+=`<div class="bloque"><h2>Escuela abierta: ${fmtF(S.sesionHoy.fecha)}, lección ${S.sesionHoy.leccionNumero}</h2>`+
+    S.clases.map(cl=>{
+      const est=estadoClaseHoy(cl.id),chip=est==='cerrada'?'<span class="chip ok">Cerrada</span>':est==='sin_clase'?'<span class="chip mal">Sin clase</span>':est==='abierta'?'<span class="chip">Abierta</span>':'<span class="chip mal">Sin abrir</span>';
+      const btn=est==='sin_abrir'?`<button class="btn sec small" data-act="mapabrir" data-id="${cl.id}">Abrir</button><button class="btn dng small" data-act="sinclase" data-id="${cl.id}">Sin clase</button>`
+        :`<button class="btn sec small" data-act="mapaeditar" data-id="${cl.id}">${est==='cerrada'?'Ver':'Continuar'}</button>`;
+      return `<div class="fila"><span class="t">${esc(cl.nombre)}</span><span style="display:flex;gap:.4rem;align-items:center">${chip}${btn}</span></div>`;
+    }).join('')+
+    `<div class="acciones">${todasResueltas()?`<button class="btn" data-act="escuelacerrar">Cerrar escuela</button>`:`<p class="muted small">Cierra o marca «sin clase» cada clase para poder cerrar la escuela.</p>`}</div></div>`;
   }
   const act=S.alumnos.filter(a=>a.activo!==false),sinC=act.filter(a=>!claseDe(a));
   const fOk=S.fajas.filter(f=>f.activa!==false).length>0&&!validarFajas(S.fajas.filter(f=>f.activa!==false)).length;
@@ -402,11 +596,17 @@ function vHoy(){
     [S.clases.length>0&&conRev===S.clases.length,`Clases con revista y lecciones completas: ${conRev} de ${S.clases.length}`,'clases',true],
     [act.length>0&&!sinC.length,act.length?`Alumnos con clase: ${act.length-sinC.length} de ${act.length}`:'Todavía no hay alumnos registrados','alumnos',true]
   ];
-  return h+bloquePendientes()+`<div class="bloque"><h2>Preparación del ciclo</h2>`+items.filter(i=>i[3]).map(i=>
+  return h+`<div class="bloque"><h2>Preparación del ciclo</h2>`+items.filter(i=>i[3]).map(i=>
     `<button class="fila" data-act="ir" data-v="${i[2]}"><span class="estado"><span class="pt ${i[0]?'ok':''}">${i[0]?'✓':''}</span><span>${esc(i[1])}</span></span></button>`).join('')
-    +`</div><p class="muted small">Abrir la escuela cada domingo, pasar lista y los resúmenes llegan en las siguientes etapas.</p>`;
+    +`</div>`;
 }
-
+function clHoyCard(cl){
+  const eq=cl.equipo||[],prox=eq.length?eq[(cl.turno||0)%eq.length]:null;
+  return `<div class="fila" style="display:block"><div class="t">${esc(cl.nombre)}</div>
+    <div class="s">${esc((fajaDe(cl.fajaId)||{}).nombre||'')}${cl.sexo!=='mixta'?', '+sexoTxt(cl.sexo):''}</div>
+    <p class="small" style="margin-top:.4rem">${prox?`Le toca dar la clase a <strong>${esc(prox.nombre)}</strong>.`:'Sin profesores en el equipo.'}</p>
+    <p class="small muted">${cl.revista&&cl.revista.nombre?'Revista: '+esc(cl.revista.nombre)+(cl.revista.temaCentral?'. Tema central: '+esc(cl.revista.temaCentral):''):'Revista sin registrar.'}</p></div>`;
+}
 /* ---------- Alumnos ---------- */
 function vAlumnos(){
   const g=isGestor();
@@ -520,8 +720,8 @@ function vClases(){
   return h+`<ul class="lista">`+S.clases.map(c=>{
     const f=fajaDe(c.fajaId),n=S.alumnos.filter(a=>a.claseId===c.id&&a.activo!==false).length,eq=(c.equipo||[]).length;
     const ok=c.revista&&c.revista.nombre&&(c.lecciones||[]).length&&c.lecciones.every(l=>l.titulo);
-    return `<li><button class="fila" data-act="cledit" data-id="${c.id}"><span><span class="t">${esc(c.nombre)}</span><br><span class="s">${esc(f?f.nombre+', '+rangoTxt(f):'Faja no encontrada')}${c.sexo!=='mixta'?'. '+sexoTxt(c.sexo):''}. ${eq} profesores, ${n} alumnos.</span></span>
-      <span class="chip ${ok?'ok':''}">${ok?'Lista':'Falta revista'}</span></button></li>`;}).join('')+'</ul>';
+    return `<li class="fila"><button class="fila" style="border:none;padding:0;flex:1" data-act="cledit" data-id="${c.id}"><span><span class="t">${esc(c.nombre)}</span><br><span class="s">${esc(f?f.nombre+', '+rangoTxt(f):'Faja no encontrada')}${c.sexo!=='mixta'?'. '+sexoTxt(c.sexo):''}. ${eq} profesores, ${n} alumnos.</span></span></button>
+      <span style="display:flex;gap:.4rem;align-items:center"><span class="chip ${ok?'ok':''}">${ok?'Lista':'Falta revista'}</span><button class="btn sec small" data-act="verfrecuencia" data-id="${c.id}">Frecuencia</button></span></li>`;}).join('')+'</ul>';
 }
 function nuevaClase(){
   const tot=S.ciclo.totalLecciones;
@@ -593,6 +793,81 @@ async function borrarClase(){
   if(n)return toast(`Esta clase tiene ${n} alumnos. Muévelos a otra clase antes de eliminarla.`,1);
   if(!await confirmBox('¿Eliminar esta clase con su equipo, revista y lecciones?','Eliminar',true))return;
   try{await db.collection('ebd_clases').doc(e.id).delete();S.clases=S.clases.filter(c=>c.id!==e.id);S.edit=null;go('clases');toast('Clase eliminada.');}catch(err){toast(err.message,1);}
+}
+
+/* ---------- Mapa de clase (pasar lista) ---------- */
+function vMapa(){
+  const m=S.mapaEdit; if(!m)return vHoy();
+  const cl=S.clases.find(c=>c.id===m.claseId),cerrada=m.estado==='cerrada';
+  const eq=cl.equipo||[];
+  const alumnos=alumnosDeClase(cl.id).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+  const pres=Object.values(m.asistencia||{}).filter(v=>v).length;
+  let h=`<button class="link" data-act="ir" data-v="hoy">Volver a Hoy</button>
+  <h1>${esc(cl.nombre)}</h1><p class="muted">${fmtF(m.fecha)}, lección ${m.leccionNumero}${cerrada?' — clase cerrada':''}</p>
+  <div class="bloque"><h2>Quién dio la clase</h2>
+    <label for="m_prof">Profesor</label><input id="m_prof" list="dl-eq" value="${esc(m.profesorNombre)}" ${cerrada?'disabled':''}>
+    <datalist id="dl-eq">${eq.map(p=>`<option value="${esc(p.nombre)}">`).join('')}</datalist>
+    <label for="m_tema">Tema del día</label><input id="m_tema" value="${esc(m.temaDia)}" ${cerrada?'disabled':''}></div>
+  <div class="bloque"><h2>Asistencia — ${pres} de ${alumnos.length} presentes</h2>
+    <ul class="lista">${alumnos.map(al=>{const p=!!m.asistencia[al.id];
+      return `<li><button class="fila" ${cerrada?'disabled':'data-act="asistoggle" data-id="'+al.id+'"'}><span class="t">${esc(al.nombre)}</span><span class="chip ${p?'ok':'mal'}">${p?'Presente':'Ausente'}</span></button></li>`;}).join('')||'<li>'+vacio('No hay alumnos activos en esta clase','')+'</li>'}</ul></div>
+  <div class="bloque"><h2>Visitantes</h2>
+    <ul class="lista">${(m.visitantes||[]).map((v,i)=>`<li class="fila"><span><span class="t">${esc(v.nombre)}</span><br><span class="s">${esc(v.telefono||'')}</span></span>${cerrada?'':'<button class="btn dng small" data-act="visquitar" data-i="'+i+'">Quitar</button>'}</li>`).join('')||'<li class="muted small" style="padding:.5rem .2rem">Sin visitantes registrados.</li>'}</ul>
+    ${cerrada?'':`<div class="grid2"><div><label for="v_nom" class="hidden">Nombre</label><input id="v_nom" placeholder="Nombre del visitante"></div><div><label for="v_tel" class="hidden">Teléfono</label><input id="v_tel" placeholder="Teléfono" inputmode="tel"></div></div>
+    <div class="acciones"><button class="btn sec small" data-act="visagregar">Agregar visitante</button></div>`}</div>
+  <div class="bloque"><h2>Totales de la clase</h2><div class="grid2">
+    <div><label for="m_bib">Biblias</label><input id="m_bib" type="number" min="0" value="${m.biblias}" ${cerrada?'disabled':''}></div>
+    <div><label for="m_rev">Revistas</label><input id="m_rev" type="number" min="0" value="${m.revistas}" ${cerrada?'disabled':''}></div></div>
+    <label for="m_ofr">Ofrenda (S/)</label><input id="m_ofr" type="number" min="0" step="0.10" value="${m.ofrenda}" ${cerrada?'disabled':''}></div>
+  ${cerrada?'':`<div class="acciones"><button class="btn sec" data-act="mapaguardar">Guardar avance</button><button class="btn" data-act="mapacerrar">Cerrar clase</button></div>`}`;
+  return h;
+}
+
+/* ---------- Informe general del día ---------- */
+function celda(v){return v==null?'—':v;}
+function filaInforme(f){
+  if(f.sinClase)return `<tr><td>${esc(f.clase.nombre)}</td><td colspan="8" class="muted small">Sin clase hoy</td></tr>`;
+  return `<tr><td>${esc(f.clase.nombre)}</td><td>${f.matriculados}</td><td>${f.ausentes}</td><td>${f.presentes}</td><td>${f.visitantes}</td><td><strong>${f.total}</strong></td><td>${f.biblias}</td><td>${f.revistas}</td><td>S/ ${f.ofrenda.toFixed(2)}</td></tr>`;
+}
+function vInforme(){
+  const inf=S.informe; if(!inf)return vHoy();
+  const filas=S.ordenOfrenda?[...inf.filas].sort((a,b)=>(b.sinClase?-1:b.ofrenda)-(a.sinClase?-1:a.ofrenda)):inf.filas;
+  const t=inf.totalGeneral,an=inf.anterior;
+  return `<button class="link" data-act="ir" data-v="hoy">Volver a Hoy</button>
+  <h1>Informe general del día</h1><p class="muted">${fmtF(inf.sesion.fecha)} — La Roca de Horeb</p>
+  <div class="acciones"><button class="btn sec small" data-act="ordenofrenda">${S.ordenOfrenda?'Ver por clase':'Ver ranking de ofrenda'}</button></div>
+  <div class="tabla-wrap"><table class="tabla"><thead><tr><th>Clase</th><th>Matric.</th><th>Ausentes</th><th>Presentes</th><th>Visitantes</th><th>Total</th><th>Biblias</th><th>Revistas</th><th>Ofrenda</th></tr></thead>
+  <tbody>${filas.map(filaInforme).join('')}
+  <tr style="font-weight:700"><td>TOTAL GENERAL</td><td>${t.matriculados}</td><td>${t.ausentes}</td><td>${t.presentes}</td><td>${t.visitantes}</td><td>${t.total}</td><td>${t.biblias}</td><td>${t.revistas}</td><td>S/ ${t.ofrenda.toFixed(2)}</td></tr>
+  ${an?`<tr class="muted"><td>Domingo anterior (${fmtF(an.fecha)})</td><td>${an.matriculados}</td><td>${an.ausentes}</td><td>${an.presentes}</td><td>${an.visitantes}</td><td>${an.total}</td><td>${an.biblias}</td><td>${an.revistas}</td><td>S/ ${an.ofrenda.toFixed(2)}</td></tr>`:''}
+  </tbody></table></div>
+  <p class="muted small" style="margin-top:1.2rem">Secretario general: ${esc(S.perfil.nombre)}. Superintendente: ${esc((S.usuarios.find(u=>u.rol==='superintendente')||{}).nombre||'—')}.</p>`;
+}
+
+/* ---------- Reporte de frecuencia por ciclo ---------- */
+function vFrecuencia(){
+  const d=S.freqData,cl=S.clases.find(c=>c.id===S.freqClase); if(!d||!cl)return vCiclo();
+  const cap=n=>n.charAt(0).toUpperCase()+n.slice(1);
+  const fCol=arr=>arr.map(v=>typeof v==='number'?(Number.isInteger(v)?v:v.toFixed(2)):v);
+  const filaFooter=(etiqueta,arr,tot,pref)=>`<tr><td>${etiqueta}</td>${d.meses.map((_,i)=>`<td colspan="${d.meses[i].sesiones.length}">${arr[i]}</td>`).join('')}<td>${pref||''}${tot}</td></tr>`;
+  return `<button class="link" data-act="ir" data-v="ciclo">Volver a Ciclo</button>
+  <h1>Frecuencia — ${esc(cl.nombre)}</h1><p class="muted">Ciclo ${esc(S.ciclo.nombre)}</p>
+  <div class="tabla-wrap"><table class="tabla"><thead>
+  <tr><th rowspan="2">Alumno</th>${d.meses.map(g=>`<th colspan="${g.sesiones.length}">${cap(g.nombre)}</th>`).join('')}<th rowspan="2">Total</th></tr>
+  <tr>${d.meses.flatMap(g=>g.sesiones.map(m=>`<th>${diaDe(m.fecha)}</th>`)).join('')}</tr>
+  </thead><tbody>
+  ${d.filas.map(f=>`<tr><td>${esc(f.alumno.nombre)}</td>${f.celdas.map(c=>`<td>${c==null?'—':c?'P':'A'}</td>`).join('')}<td><strong>${f.total}</strong></td></tr>`).join('')||`<tr><td colspan="${d.meses.reduce((a,g)=>a+g.sesiones.length,0)+2}" class="muted">Sin alumnos activos en esta clase.</td></tr>`}
+  </tbody><tfoot>
+  ${filaFooter('Alumnos matriculados',d.footer.matriculados,d.totales.matriculados)}
+  ${filaFooter('Ausentes',d.footer.ausentes,d.totales.ausentes)}
+  ${filaFooter('Presentes',d.footer.presentes,d.totales.presentes)}
+  ${filaFooter('Visitantes',d.footer.visitantes,d.totales.visitantes)}
+  ${filaFooter('Total de asistencia',d.footer.totalAsist,d.totales.totalAsist)}
+  ${filaFooter('Biblias',d.footer.biblias,d.totales.biblias)}
+  ${filaFooter('Revistas',d.footer.revistas,d.totales.revistas)}
+  ${filaFooter('Ofrendas',d.footer.ofrendas.map(v=>'S/ '+v.toFixed(2)),'S/ '+d.totales.ofrendas.toFixed(2))}
+  </tfoot></table></div>
+  <p class="muted small" style="margin-top:1rem">P = presente, A = ausente, — = ese domingo no hubo clase.</p>`;
 }
 
 /* ---------- Ciclo ---------- */
@@ -885,7 +1160,23 @@ const acciones={
   cicloCrear(){crearCiclo();},
   ciclocerrar(){cerrarCiclo();},
   ciclolecc(){corregirLecciones();},
-  evalguardar(){guardarEval();}
+  evalguardar(){guardarEval();},
+  escuelaabrir(){const f=$('ae_fecha').value;if(!f)return toast('Elige la fecha.',1);abrirEscuela(f);},
+  escuelacerrar(){cerrarEscuela();},
+  mapabrir(d){abrirClaseHoy(d.id);},
+  mapaeditar(d){abrirMapaEdit(d.id);},
+  mapaguardar(){guardarMapa(false);},
+  mapacerrar(){guardarMapa(true);},
+  sinclase(d){marcarSinClase(d.id);},
+  asistoggle(d){const m=S.mapaEdit;m.asistencia[d.id]=!m.asistencia[d.id];render();},
+  visagregar(){
+    const n=$('v_nom').value.trim(); if(!n)return toast('Escribe el nombre del visitante.',1);
+    S.mapaEdit.visitantes.push({nombre:n,telefono:$('v_tel').value.trim()}); render();
+  },
+  visquitar(d){S.mapaEdit.visitantes.splice(+d.i,1);render();},
+  verinformehoy(){irInforme(S.sesionCerradaHoy.id);},
+  ordenofrenda(){S.ordenOfrenda=!S.ordenOfrenda;render();},
+  verfrecuencia(d){irFrecuencia(d.id);}
 };
 const cambios={
   filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();},
