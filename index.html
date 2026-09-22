@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F2.0 -->
+<!-- VERSION: 2026-09-21-F2.1 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -517,7 +517,7 @@ function sugerirClase(a){
 function go(v,param){S.view=v;S.param=param||null;if(v!=='clase')S.edit=null;render();window.scrollTo(0,0);}
 function render(){
   const nav=NAV[S.perfil.rol];
-  if(!nav.some(n=>n[0]===S.view)&&S.view!=='clase')S.view='hoy';
+  if(!nav.some(n=>n[0]===S.view)&&!['clase','mapa','informe','frecuencia'].includes(S.view))S.view='hoy';
   const activo=S.view==='clase'?'clases':S.view;
   $('app').innerHTML=`<header class="top"><div class="brand"><span class="brand-mark">EBD</span><div><strong>La Roca de Horeb</strong><small>Escuela Bíblica Dominical</small></div></div>
   <div class="who"><span>${esc(S.perfil.nombre)}</span><button class="link" data-act="salir">Salir</button></div></header>
