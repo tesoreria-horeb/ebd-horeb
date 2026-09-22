@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F1.5 -->
+<!-- VERSION: 2026-09-21-F1.6 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -206,7 +206,9 @@ window.addEventListener('DOMContentLoaded',()=>{
     $('app').innerHTML=`<div class="entrada"><h1>Falta la configuración</h1><p class="muted" style="margin-top:.6rem">Abre este archivo, busca <strong>FIREBASE_CONFIG</strong> y pega la configuración del proyecto de Firebase de la EBD.</p></div>`;
     return;
   }
-  firebase.initializeApp(FIREBASE_CONFIG); auth=firebase.auth(); db=firebase.firestore();
+  firebase.initializeApp(FIREBASE_CONFIG); auth=firebase.auth(); db=firebase.firestore(); auth.languageCode='es';
+  const qp=new URLSearchParams(location.search);
+  if(qp.get('mode')==='resetPassword'&&qp.get('oobCode')){pantallaNuevaClave(qp.get('oobCode'));return;}
   auth.onAuthStateChanged(async u=>{
     if(!u){S.user=null;S.perfil=null;pantallaLogin();return;}
     S.user=u; cargando(true);
@@ -219,6 +221,18 @@ function pantallaMensaje(titulo,texto,extra){
   $('app').innerHTML=`<div class="entrada"><span class="brand-mark">EBD</span><h1>${esc(titulo)}</h1><p class="muted" style="margin-top:.6rem">${texto}</p><div class="acciones">${extra||''}<button class="btn sec" data-act="salir">Salir</button></div></div>`;
 }
 
+function pantallaNuevaClave(code){
+  $('app').innerHTML=`<div class="entrada"><span class="brand-mark">EBD</span><h1>La Roca de Horeb</h1><p class="muted">Verificando el enlace…</p></div>`;
+  auth.verifyPasswordResetCode(code).then(email=>{
+    $('app').innerHTML=`<div class="entrada"><span class="brand-mark">EBD</span><h1>Nueva contraseña</h1><p class="muted">Para la cuenta ${esc(email)}</p>
+    <label for="np_1">Nueva contraseña</label><input id="np_1" type="password" autocomplete="new-password">
+    <label for="np_2">Repite la contraseña</label><input id="np_2" type="password" autocomplete="new-password">
+    <div class="acciones"><button class="btn" data-act="npconfirmar" data-code="${esc(code)}">Cambiar contraseña</button></div></div>`;
+    const p2=$('np_2'); if(p2)p2.addEventListener('keydown',e=>{if(e.key==='Enter')acciones.npconfirmar({code});});
+  }).catch(()=>{
+    pantallaMensaje('Enlace no válido','Este enlace para cambiar la contraseña ya no sirve. Puede haber expirado o haberse usado antes. Pide uno nuevo desde «Olvidé mi contraseña».');
+  });
+}
 function pantallaLogin(modo){
   const primer = modo==='primer';
   $('app').innerHTML=`<div class="entrada"><span class="brand-mark">EBD</span><h1>La Roca de Horeb</h1><p class="muted">Escuela Bíblica Dominical</p>
@@ -248,7 +262,8 @@ async function iniciarSesion(){
       `<input id="b_nom" placeholder="Tu nombre" style="margin-bottom:.6rem"><button class="btn" data-act="bootstrap">Ser administrador general</button>`);
     return;
   }
-  await db.collection('ebd_pendientes').doc(u.uid).set({email:u.email||'',fecha:ts()},{merge:true});
+  const nomPrevio=sessionStorage.getItem('ebd_nombre')||''; sessionStorage.removeItem('ebd_nombre');
+  await db.collection('ebd_pendientes').doc(u.uid).set({email:u.email||'',nombre:nomPrevio,fecha:ts()},{merge:true});
   pantallaMensaje('Acceso pendiente','Tu cuenta ('+esc(u.email)+') todavía no tiene un rol en la EBD. Ya avisamos al administrador; cuando te dé acceso, vuelve a entrar.');
 }
 
@@ -706,7 +721,7 @@ async function guardarFaja(id){
 }
 function bloquePendientes(){
   if(!isGestor()||!S.pendientes.length)return '';
-  return `<div class="aviso"><strong>Piden acceso</strong>${S.pendientes.map(p=>`<div class="fila" style="border:none"><span>${esc(p.email)}</span><span style="display:flex;gap:.4rem"><button class="btn small" data-act="usdar" data-id="${p.id}">Dar acceso</button><button class="btn dng small" data-act="usrechazar" data-id="${p.id}">Rechazar</button></span></div>`).join('')}</div>`;
+  return `<div class="aviso"><strong>Piden acceso</strong>${S.pendientes.map(p=>`<div class="fila" style="border:none"><span>${p.nombre?`<strong>${esc(p.nombre)}</strong><br><span class="s">${esc(p.email)}</span>`:esc(p.email)}</span><span style="display:flex;gap:.4rem"><button class="btn small" data-act="usdar" data-id="${p.id}">Dar acceso</button><button class="btn dng small" data-act="usrechazar" data-id="${p.id}">Rechazar</button></span></div>`).join('')}</div>`;
 }
 function tUsuarios(){
   const inact=S.usuarios.filter(u=>u.activo===false).length,lista=S.usuarios.filter(u=>S.verInact||u.activo!==false);
@@ -775,7 +790,7 @@ async function guardarUsuario(id){
 function modalDarAcceso(id){
   const p=S.pendientes.find(x=>x.id===id),solo=!isAdmin();
   const roles=(solo?['profesor']:Object.keys(ROLES)).map(r=>`<option value="${r}" ${r==='profesor'?'selected':''}>${ROLES[r]}</option>`).join('');
-  openModal('Dar acceso',`<p class="muted">${esc(p.email)}</p><label for="u_nom">Nombre</label><input id="u_nom"><label for="u_rol">Rol</label><select id="u_rol">${roles}</select>${checksClases(null)}`,
+  openModal('Dar acceso',`<p class="muted">${esc(p.email)}</p><label for="u_nom">Nombre</label><input id="u_nom" value="${esc(p.nombre||'')}"><label for="u_rol">Rol</label><select id="u_rol">${roles}</select>${checksClases(null)}`,
   [{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Dar acceso',fn:async()=>{
     const nombre=$('u_nom').value.trim(),rol=solo?'profesor':$('u_rol').value,sel=clasesMarcadas(); if(!nombre)return toast('Falta el nombre.',1);
     try{const b=db.batch();b.set(db.collection('ebd_usuarios').doc(id),{nombre,email:p.email,rol,activo:true,creado:ts()});b.delete(db.collection('ebd_pendientes').doc(id));await b.commit();
@@ -832,6 +847,16 @@ const acciones={
     cargando(false);
   },
   salir(){auth.signOut();},
+  async npconfirmar(d){
+    const p1=$('np_1').value,p2=$('np_2').value;
+    if(p1.length<6)return toast('La contraseña debe tener al menos 6 caracteres.',1);
+    if(p1!==p2)return toast('Las contraseñas no coinciden.',1);
+    cargando(true);
+    try{await auth.confirmPasswordReset(d.code,p1);cargando(false);
+      pantallaMensaje('Contraseña actualizada','Ya puedes entrar con tu nueva contraseña.',`<button class="btn" data-act="nplogin">Ir a entrar</button>`);
+    }catch(e){cargando(false);toast(authErr(e),1);}
+  },
+  nplogin(){history.replaceState(null,'',location.pathname);pantallaLogin();},
   ir(d){go(d.v);},
   ajtab(d){S.ajTab=d.t;render();},
   alnuevo(){modalAlumno(null,(S.fclase&&S.fclase!=='_sin')?S.fclase:'');},
