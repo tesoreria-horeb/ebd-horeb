@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F1.2 -->
+<!-- VERSION: 2026-09-21-F1.3 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -397,7 +397,7 @@ function vAlumnos(){
   const clases=g?S.clases:misClases();
   let h=`<h1>${g?'Alumnos':'Mi clase'}</h1>`;
   if(!S.ciclo)return h+vacio('Primero hace falta un ciclo','Crea el ciclo para poder asignar alumnos a sus clases.');
-  if(g)h+=`<div class="acciones"><button class="btn" data-act="alnuevo">Nuevo alumno</button><button class="btn sec" data-act="alasignar">Asignar clases por edad</button></div>`;
+  if(g)h+=`<div class="acciones"><button class="btn" data-act="alnuevo">Nuevo alumno</button><button class="btn sec" data-act="alasignar">Asignar por edad (sin clase)</button></div>`;
   h+=`<label for="f_q" class="hidden">Buscar</label><input id="f_q" type="search" placeholder="Buscar por nombre o DNI" value="${esc(S.fq)}" data-inp="filtro">
   <label for="f_c" class="hidden">Clase</label><select id="f_c" data-chg="filtro" style="margin-top:.6rem"><option value="">Todas las clases</option>${g?'<option value="_sin" '+(S.fclase==='_sin'?'selected':'')+'>Sin clase</option>':''}${clases.map(c=>`<option value="${c.id}" ${S.fclase===c.id?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>
   <p id="cuenta" class="muted small" style="margin:.7rem 0 0"></p><ul class="lista" id="listaAl"></ul>`;
@@ -425,11 +425,13 @@ function pintarAlumnos(){
 function modalAlumno(id,claseId){
   const a=id?S.alumnos.find(x=>x.id===id):{nombre:'',dni:'',fechaNac:'',sexo:'',telefono:'',responsable:'',claseId:claseId||'',activo:true};
   const opts=S.clases.map(c=>`<option value="${c.id}" ${a.claseId===c.id?'selected':''}>${esc(c.nombre)}${c.sexo!=='mixta'?' ('+sexoTxt(c.sexo).toLowerCase()+')':''}</option>`).join('');
-  const body=`<label for="a_cl">Clase</label><select id="a_cl" data-chg="alclase"><option value="">Asignar según la edad</option>${opts}</select>
+  const body=`<label for="a_cl">Clase</label><select id="a_cl" data-chg="alclase"><option value="">Elegir clase</option>${opts}</select>
+  <p id="a_pista" class="muted small" style="margin-top:.35rem"></p>
   <label for="a_nom">Nombre completo</label><input id="a_nom" value="${esc(a.nombre)}" autocomplete="off">
+  
   <div class="grid2"><div><label for="a_sx">Sexo</label><select id="a_sx"><option value="">Elegir</option><option value="M" ${a.sexo==='M'?'selected':''}>Varón</option><option value="F" ${a.sexo==='F'?'selected':''}>Dama</option></select></div>
   <div><label for="a_tel">Teléfono <span class="opt">(opcional)</span></label><input id="a_tel" value="${esc(a.telefono)}" inputmode="tel"></div></div>
-  <div class="grid2"><div><label for="a_fn">Fecha de nacimiento <span class="opt">(opcional)</span></label><input id="a_fn" type="date" value="${esc(a.fechaNac)}"></div>
+  <div class="grid2"><div><label for="a_fn">Fecha de nacimiento <span class="opt">(opcional)</span></label><input id="a_fn" type="date" value="${esc(a.fechaNac)}" data-inp="alfecha"></div>
   <div><label for="a_dni">DNI <span class="opt">(opcional)</span></label><input id="a_dni" value="${esc(a.dni)}" inputmode="numeric"></div></div>
   <label for="a_resp">Responsable <span class="opt">(para menores, opcional)</span></label><input id="a_resp" value="${esc(a.responsable)}">
   <div class="check"><input type="checkbox" id="a_act" ${a.activo!==false?'checked':''}><label for="a_act">Alumno activo</label></div>`;
@@ -437,7 +439,15 @@ function modalAlumno(id,claseId){
   if(!id)btns.splice(1,0,{label:'Guardar y agregar otro',cls:'sec',fn:()=>guardarAlumno(null,true)});
   if(id&&isAdmin())btns.unshift({label:'Eliminar',cls:'dng',fn:()=>eliminarAlumno(id)});
   openModal(id?'Editar alumno':'Nuevo alumno',body,btns);
-  aplicarClaseSexo(false); $('a_nom').focus();
+  aplicarClaseSexo(false); pistaEdad(); $('a_nom').focus();
+}
+function pistaEdad(){
+  const p=$('a_pista'),fn=$('a_fn'); if(!p||!fn)return;
+  if(!fn.value){p.textContent='';return;}
+  const e=edadEn(fn.value,S.ciclo?S.ciclo.fechaInicio:null);
+  const f=e==null?null:(S.ciclo&&S.ciclo.fajasSnap||[]).find(x=>e>=x.edadMin&&(x.edadMax==null||e<=x.edadMax));
+  const cl=f?S.clases.filter(c=>c.fajaId===f.id):[];
+  p.textContent=e==null?'':(cl.length?`Por la edad (${e} años) le correspondería: ${cl.map(c=>c.nombre).join(' o ')}.`:`Con ${e} años, ninguna clase activa cubre esa edad.`);
 }
 function aplicarClaseSexo(forzar){
   const sx=$('a_sx'),cl=$('a_cl'); if(!sx||!cl)return;
@@ -449,11 +459,11 @@ async function guardarAlumno(id,otro){
     telefono:$('a_tel').value.trim(),responsable:$('a_resp').value.trim(),claseId:$('a_cl').value,activo:$('a_act').checked};
   if(!d.nombre)return toast('Falta el nombre del alumno.',1);
   if(!d.sexo)return toast('Elige el sexo del alumno.',1);
+  if(!d.claseId)return toast('Elige la clase del alumno.',1);
   const cl=S.clases.find(c=>c.id===d.claseId);
   if(cl&&cl.sexo==='damas'&&d.sexo!=='F')return toast(cl.nombre+' es una clase solo de damas.',1);
   if(cl&&cl.sexo==='varones'&&d.sexo!=='M')return toast(cl.nombre+' es una clase solo de varones.',1);
   if(d.dni&&S.alumnos.some(x=>x.dni===d.dni&&x.id!==id))return toast('Ya hay un alumno con ese DNI.',1);
-  if(!d.claseId)d.claseId=sugerirClase(d)||'';
   try{
     if(id){await db.collection('ebd_alumnos').doc(id).update({...d,actualizado:ts()});const i=S.alumnos.findIndex(x=>x.id===id);S.alumnos[i]={...S.alumnos[i],...d};}
     else{const r=await db.collection('ebd_alumnos').add({...d,creado:ts(),actualizado:ts()});S.alumnos.push({id:r.id,...d});}
@@ -469,12 +479,13 @@ async function eliminarAlumno(id){
 }
 async function asignarPorEdad(){
   if(!S.clases.length)return toast('Primero crea las clases del ciclo.',1);
-  const modo=await choiceBox('Asignar clases por edad','La clase se calcula con la edad que tiene cada alumno al empezar el ciclo, según su sexo y las fajas.',[['sin','Solo alumnos sin clase'],['todos','Todos los activos']]);
-  if(!modo)return;
+  const objetivo=S.alumnos.filter(a=>a.activo!==false&&!claseDe(a));
+  if(!objetivo.length)return toast('No hay alumnos sin clase. Este botón nunca cambia la clase de un alumno que ya la tiene.');
+  if(!await confirmBox(`Se calculará la clase de ${objetivo.length} alumnos sin clase, según su edad y sexo. Los que ya tienen clase no se tocan.`,'Asignar'))return;
   const cambios=[];let sinDatos=0;
-  S.alumnos.filter(a=>a.activo!==false&&(modo==='todos'||!claseDe(a))).forEach(a=>{
-    const c=sugerirClase(a); if(!c){sinDatos++;return;} if(c!==a.claseId)cambios.push([a,c]);});
-  if(!cambios.length)return toast(`No hay cambios. ${sinDatos?sinDatos+' alumnos sin datos suficientes.':''}`);
+  objetivo.forEach(a=>{
+    const c=sugerirClase(a); if(!c){sinDatos++;return;} cambios.push([a,c]);});
+  if(!cambios.length)return toast(`No se pudo asignar a nadie. ${sinDatos?sinDatos+' alumnos sin edad o sexo suficientes.':''}`);
   cargando(true);
   try{
     for(let i=0;i<cambios.length;i+=400){const b=db.batch();cambios.slice(i,i+400).forEach(([a,c])=>b.update(db.collection('ebd_alumnos').doc(a.id),{claseId:c,actualizado:ts()}));await b.commit();}
@@ -852,7 +863,8 @@ const acciones={
 };
 const cambios={
   filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();},
-  alclase(){aplicarClaseSexo(true);}
+  alclase(){aplicarClaseSexo(true);},
+  alfecha(){pistaEdad();}
 };
 document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(t&&acciones[t.dataset.act]){e.preventDefault();acciones[t.dataset.act](t.dataset,t);}});
 document.addEventListener('change',e=>{const t=e.target.closest('[data-chg]');if(t&&cambios[t.dataset.chg])cambios[t.dataset.chg](t.dataset,t);});
