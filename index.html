@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F1.4 -->
+<!-- VERSION: 2026-09-21-F1.5 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -159,7 +159,7 @@ const isAdmin = () => S.perfil && S.perfil.rol==='admin';
 const isGestor = () => S.perfil && ['admin','superintendente'].includes(S.perfil.rol);
 const hoyISO = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 const fmtF = f => f ? f.split('-').reverse().join('/') : '';
-const sexoTxt = s => ({varones:'Varones',damas:'Damas',mixta:'Mixta'}[s]||'');
+const sexoTxt = s => ({varones:'Masculino',damas:'Femenino',mixta:'Mixta'}[s]||'');
 const sexoAlTxt = s => s==='M'?'masculino':s==='F'?'femenino':'';
 
 /* ---------- Utilidades de interfaz ---------- */
@@ -522,7 +522,7 @@ function abrirClase(id){
 function vClase(){
   const e=S.edit; if(!e)return vClases();
   const fajas=S.ciclo.fajasSnap||[],f=fajas.find(x=>x.id===e.fajaId);
-  const sexoSel=`<select id="c_sexo"><option value="mixta" ${e.sexo!=='varones'&&e.sexo!=='damas'?'selected':''}>Mixta (varones y damas)</option><option value="damas" ${e.sexo==='damas'?'selected':''}>Solo damas</option><option value="varones" ${e.sexo==='varones'?'selected':''}>Solo varones</option></select>`;
+  const sexoSel=`<select id="c_sexo"><option value="mixta" ${e.sexo!=='varones'&&e.sexo!=='damas'?'selected':''}>Mixta (masculino y femenino)</option><option value="damas" ${e.sexo==='damas'?'selected':''}>Solo femenino</option><option value="varones" ${e.sexo==='varones'?'selected':''}>Solo masculino</option></select>`;
   const eq=e.equipo||[];
   const lleno=e.lecciones.filter(l=>l.titulo).length;
   return `<button class="link" data-act="ir" data-v="clases">Volver a clases</button>
