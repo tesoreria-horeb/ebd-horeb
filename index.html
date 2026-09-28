@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- VERSION: 2026-09-21-F2.1 -->
+<!-- VERSION: 2026-09-28-F2.3 -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -147,7 +147,7 @@ const NAV = {
   profesor:[['hoy','Hoy'],['alumnos','Mi clase']]
 };
 const S = {user:null,perfil:null,cfg:CFG_DEF,fajas:[],ciclos:[],ciclo:null,clases:[],usuarios:[],pendientes:[],alumnos:[],
-  view:'hoy',param:null,ajTab:'fajas',fq:'',fclase:'',edit:null,lecOpen:false,verInact:false,sesiones:[],sesionHoy:null,sesionCerradaHoy:null,mapas:{},mapaEdit:null,mapaEditId:null,informe:null,freqClase:''};
+  view:'hoy',param:null,ajTab:'fajas',fq:'',fclase:'',edit:null,lecOpen:false,verInact:false,sesiones:[],sesionHoy:null,sesionCerradaHoy:null,mapas:{},mapaEdit:null,mapaEditId:null,informe:null,freqClase:'',verInactAl:false,visDraft:{nom:'',tel:''}};
 let db,auth;
 const $ = id => document.getElementById(id);
 const ts = () => firebase.firestore.FieldValue.serverTimestamp();
@@ -365,11 +365,15 @@ async function abrirClaseHoy(claseId){
   }catch(e){toast(e.message,1);}
   cargando(false);
 }
-function abrirMapaEdit(claseId){S.mapaEditId=claseId;S.mapaEdit=JSON.parse(JSON.stringify(S.mapas[claseId]));go('mapa',claseId);}
+function abrirMapaEdit(claseId){S.visDraft={nom:'',tel:''};S.mapaEditId=claseId;S.mapaEdit=JSON.parse(JSON.stringify(S.mapas[claseId]));go('mapa',claseId);}
 function syncMapa(){
   const m=S.mapaEdit; if(!m||!$('m_prof'))return;
-  m.profesorNombre=$('m_prof').value.trim(); m.temaDia=$('m_tema').value.trim();
+  const sel=$('m_prof').value;
+  if(sel==='__otro__'){m._otro=true;m.profesorNombre=($('m_prof_otro')?$('m_prof_otro').value:'').trim();}
+  else{m._otro=false;m.profesorNombre=sel.trim();}
+  m.temaDia=$('m_tema').value.trim();
   m.biblias=parseInt($('m_bib').value,10)||0; m.revistas=parseInt($('m_rev').value,10)||0; m.ofrenda=parseFloat($('m_ofr').value)||0;
+  if($('v_nom'))S.visDraft={nom:$('v_nom').value,tel:$('v_tel').value};
 }
 async function guardarMapa(cerrar){
   syncMapa(); const m=S.mapaEdit;
@@ -380,18 +384,48 @@ async function guardarMapa(cerrar){
   if(cerrar){
     d.estado='cerrada'; d.cerradoFecha=hoyISO();
     d.sustituto=!!(prox&&normTxt(prox.nombre)!==normTxt(m.profesorNombre));
+    d.turnoAvanzo=!!(prox&&normTxt(prox.nombre)===normTxt(m.profesorNombre));
+    d.turnoPrevio=cl.turno||0;
   }
   cargando(true);
   try{
     await db.collection('ebd_mapas').doc(m.id).update(d);
     S.mapas[m.claseId]={...S.mapas[m.claseId],...d};
     if(cerrar){
-      const nt=eq.length?((cl.turno||0)+1)%eq.length:0;
-      if(eq.length&&normTxt(prox.nombre)===normTxt(m.profesorNombre))await db.collection('ebd_clases').doc(cl.id).update({turno:nt});
-      if(eq.length&&normTxt(prox.nombre)===normTxt(m.profesorNombre))cl.turno=nt;
-      cargando(false); go('hoy'); toast('Clase cerrada.'); return;
+      let aviso='';
+      if(d.turnoAvanzo){
+        const nt=((cl.turno||0)+1)%eq.length;
+        try{await db.collection('ebd_clases').doc(cl.id).update({turno:nt});cl.turno=nt;}
+        catch(e){aviso=' No se pudo avanzar el turno de profesores: revísalo en Clases.';}
+      }
+      cargando(false); go('hoy'); toast('Clase cerrada.'+aviso,!!aviso); return;
     }
     cargando(false); S.mapaEdit=JSON.parse(JSON.stringify(S.mapas[m.claseId])); render(); toast('Guardado.');
+  }catch(e){cargando(false);toast(e.message,1);}
+}
+async function reabrirClase(claseId){
+  const m0=S.mapas[claseId];
+  if(!S.sesionHoy||!m0||m0.estado!=='cerrada')return toast('Solo se puede reabrir una clase cerrada mientras la escuela siga abierta.',1);
+  if(!await confirmBox('¿Reabrir esta clase para corregirla? Tendrás que cerrarla de nuevo al terminar.','Reabrir'))return;
+  const cl=S.clases.find(c=>c.id===claseId),eq=cl.equipo||[];
+  // Si el cierre anterior avanzó el turno de profesores, lo devolvemos para no avanzarlo dos veces.
+  // Las clases cerradas antes de esta versión no guardaban ese dato: se deduce de quién dio la clase.
+  let restaurar=null;
+  if(eq.length){
+    if(m0.turnoAvanzo===true)restaurar=Math.min(m0.turnoPrevio||0,eq.length-1);
+    else if(m0.turnoAvanzo===undefined){
+      const ant=((cl.turno||0)-1+eq.length)%eq.length;
+      if(normTxt(eq[ant].nombre)===normTxt(m0.profesorNombre))restaurar=ant;
+    }
+  }
+  cargando(true);
+  try{
+    await db.collection('ebd_mapas').doc(m0.id).update({estado:'abierta',turnoAvanzo:false,actualizado:ts()});
+    m0.estado='abierta'; m0.turnoAvanzo=false;
+    if(restaurar!==null&&restaurar!==(cl.turno||0)){
+      try{await db.collection('ebd_clases').doc(cl.id).update({turno:restaurar});cl.turno=restaurar;}catch(e){}
+    }
+    cargando(false); abrirMapaEdit(claseId); toast('Clase reabierta. Corrige y ciérrala de nuevo.');
   }catch(e){cargando(false);toast(e.message,1);}
 }
 async function marcarSinClase(claseId){
@@ -457,11 +491,12 @@ async function irFrecuencia(claseId){
 async function computeFrecuencia(claseId){
   const ms=await db.collection('ebd_mapas').where('cicloId','==',S.ciclo.id).where('claseId','==',claseId).get();
   const mapas=ms.docs.map(d=>d.data()).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const alumnos=alumnosDeClase(claseId).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+  const conAsist=new Set(); mapas.forEach(m=>Object.keys(m.asistencia||{}).forEach(k=>conAsist.add(k)));
+  const alumnos=S.alumnos.filter(a=>a.claseId===claseId&&(a.activo!==false||conAsist.has(a.id))).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
   const gruposObj={}; mapas.forEach(m=>{const mm=mesDe(m.fecha);(gruposObj[mm]=gruposObj[mm]||[]).push(m);});
   const meses=Object.keys(gruposObj).map(nombre=>({nombre,sesiones:gruposObj[nombre]}));
   const filas=alumnos.map(al=>{
-    const celdas=mapas.map(m=>m.estado==='sin_clase'?null:!!(m.asistencia&&m.asistencia[al.id]));
+    const celdas=mapas.map(m=>(m.estado==='sin_clase'||!m.asistencia||!(al.id in m.asistencia))?null:!!m.asistencia[al.id]);
     const total=celdas.filter(c=>c===true).length;
     return {alumno:al,celdas,total};
   });
@@ -580,7 +615,7 @@ function vHoy(){
     S.clases.map(cl=>{
       const est=estadoClaseHoy(cl.id),chip=est==='cerrada'?'<span class="chip ok">Cerrada</span>':est==='sin_clase'?'<span class="chip mal">Sin clase</span>':est==='abierta'?'<span class="chip">Abierta</span>':'<span class="chip mal">Sin abrir</span>';
       const btn=est==='sin_abrir'?`<button class="btn sec small" data-act="mapabrir" data-id="${cl.id}">Abrir</button><button class="btn dng small" data-act="sinclase" data-id="${cl.id}">Sin clase</button>`
-        :`<button class="btn sec small" data-act="mapaeditar" data-id="${cl.id}">${est==='cerrada'?'Ver':'Continuar'}</button>`;
+        :est==='sin_clase'?'':`<button class="btn sec small" data-act="mapaeditar" data-id="${cl.id}">${est==='cerrada'?'Ver':'Continuar'}</button>`;
       return `<div class="fila"><span class="t">${esc(cl.nombre)}</span><span style="display:flex;gap:.4rem;align-items:center">${chip}${btn}</span></div>`;
     }).join('')+
     `<div class="acciones">${todasResueltas()?`<button class="btn" data-act="escuelacerrar">Cerrar escuela</button>`:`<p class="muted small">Cierra o marca «sin clase» cada clase para poder cerrar la escuela.</p>`}</div></div>`;
@@ -617,6 +652,8 @@ function vAlumnos(){
   h+=`<label for="f_q" class="hidden">Buscar</label><input id="f_q" type="search" placeholder="Buscar por nombre o DNI" value="${esc(S.fq)}" data-inp="filtro">
   <label for="f_c" class="hidden">Clase</label><select id="f_c" data-chg="filtro" style="margin-top:.6rem"><option value="">Todas las clases</option>${g?'<option value="_sin" '+(S.fclase==='_sin'?'selected':'')+'>Sin clase</option>':''}${clases.map(c=>`<option value="${c.id}" ${S.fclase===c.id?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>
   <p id="cuenta" class="muted small" style="margin:.7rem 0 0"></p><ul class="lista" id="listaAl"></ul>`;
+  const nInact=S.alumnos.filter(a=>a.activo===false).length;
+  if(nInact)h+=`<div class="acciones"><button class="btn sec small" data-act="alinact">${S.verInactAl?'Ocultar':'Mostrar'} inactivos (${nInact})</button></div>`;
   setTimeout(pintarAlumnos,0);
   return h;
 }
@@ -627,6 +664,7 @@ function pintarAlumnos(){
     if(S.fclase==='_sin'&&claseDe(a))return false;
     if(S.fclase&&S.fclase!=='_sin'&&a.claseId!==S.fclase)return false;
     if(q&&!(norm(a.nombre).includes(q)||norm(a.dni).includes(q)))return false;
+    if(a.activo===false&&!S.verInactAl)return false;
     return true;});
   const act=S.alumnos.filter(a=>a.activo!==false).length,sin=g?S.alumnos.filter(a=>a.activo!==false&&!claseDe(a)).length:0;
   $('cuenta').textContent=`${l.length} en la lista. ${act} alumnos activos${g?`, ${sin} sin clase`:''}.`;
@@ -653,7 +691,7 @@ function modalAlumno(id,claseId){
   <div class="check"><input type="checkbox" id="a_act" ${a.activo!==false?'checked':''}><label for="a_act">Alumno activo</label></div>`;
   const btns=[{label:'Cancelar',cls:'sec',fn:closeModal},{label:'Guardar alumno',fn:()=>guardarAlumno(id,false)}];
   if(!id)btns.splice(1,0,{label:'Guardar y agregar otro',cls:'sec',fn:()=>guardarAlumno(null,true)});
-  if(id&&isAdmin())btns.unshift({label:'Eliminar',cls:'dng',fn:()=>eliminarAlumno(id)});
+  if(id&&isGestor())btns.unshift({label:'Eliminar',cls:'dng',fn:()=>eliminarAlumno(id)});
   openModal(id?'Editar alumno':'Nuevo alumno',body,btns);
   aplicarClaseSexo(false); pistaEdad(); $('a_nom').focus();
 }
@@ -689,9 +727,27 @@ async function guardarAlumno(id,otro){
     else toast(d.claseId?'Alumno guardado.':'Alumno guardado, sin clase asignada.');
   }catch(e){toast('No se pudo guardar: '+e.message,1);}
 }
+async function alumnoTieneAsistencia(id){
+  const r=await db.collection('ebd_mapas').where('asistencia.'+id,'in',[true,false]).limit(1).get();
+  return !r.empty;
+}
 async function eliminarAlumno(id){
-  if(!await confirmBox('¿Eliminar este alumno? Se borra su ficha. Si solo dejó de asistir, es mejor marcarlo como inactivo.','Eliminar',true))return;
-  try{await db.collection('ebd_alumnos').doc(id).delete();S.alumnos=S.alumnos.filter(a=>a.id!==id);closeModal();render();toast('Alumno eliminado.');}catch(e){toast(e.message,1);}
+  const a=S.alumnos.find(x=>x.id===id); if(!a)return;
+  cargando(true);
+  let tiene;
+  try{tiene=await alumnoTieneAsistencia(id);}
+  catch(e){cargando(false);return toast('No se pudo verificar su asistencia: '+e.message,1);}
+  cargando(false);
+  if(tiene){
+    if(a.activo===false)return toast('Este alumno ya tiene asistencia registrada, por eso no se puede eliminar. Ya está inactivo.',1);
+    if(!await confirmBox(`${a.nombre} ya tiene asistencia registrada, así que no se puede eliminar sin descuadrar los informes. ¿Lo marco como inactivo?`,'Marcar inactivo'))return;
+    try{await db.collection('ebd_alumnos').doc(id).update({activo:false,actualizado:ts()});a.activo=false;closeModal();render();toast('Alumno marcado como inactivo.');}
+    catch(e){toast(e.message,1);}
+    return;
+  }
+  if(!await confirmBox(`¿Eliminar a ${a.nombre}? Se borra su ficha y no se puede deshacer.`,'Eliminar',true))return;
+  try{await db.collection('ebd_alumnos').doc(id).delete();S.alumnos=S.alumnos.filter(x=>x.id!==id);closeModal();render();toast('Alumno eliminado.');}
+  catch(e){toast(e.message,1);}
 }
 async function asignarPorEdad(){
   if(!S.clases.length)return toast('Primero crea las clases del ciclo.',1);
@@ -800,26 +856,33 @@ function vMapa(){
   const m=S.mapaEdit; if(!m)return vHoy();
   const cl=S.clases.find(c=>c.id===m.claseId),cerrada=m.estado==='cerrada';
   const eq=cl.equipo||[];
+  const enEquipo=!!m.profesorNombre&&eq.some(p=>normTxt(p.nombre)===normTxt(m.profesorNombre));
+  const otroProf=!!m._otro||(!!m.profesorNombre&&!enEquipo);
   const alumnos=alumnosDeClase(cl.id).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
   const pres=Object.values(m.asistencia||{}).filter(v=>v).length;
   let h=`<button class="link" data-act="ir" data-v="hoy">Volver a Hoy</button>
   <h1>${esc(cl.nombre)}</h1><p class="muted">${fmtF(m.fecha)}, lección ${m.leccionNumero}${cerrada?' — clase cerrada':''}</p>
   <div class="bloque"><h2>Quién dio la clase</h2>
-    <label for="m_prof">Profesor</label><input id="m_prof" list="dl-eq" value="${esc(m.profesorNombre)}" ${cerrada?'disabled':''}>
-    <datalist id="dl-eq">${eq.map(p=>`<option value="${esc(p.nombre)}">`).join('')}</datalist>
+    <label for="m_prof">Profesor</label>
+    <select id="m_prof" data-chg="profsel" ${cerrada?'disabled':''}>
+      <option value="">Elegir profesor</option>
+      ${eq.map(p=>`<option value="${esc(p.nombre)}" ${!otroProf&&normTxt(p.nombre)===normTxt(m.profesorNombre)?'selected':''}>${esc(p.nombre)}</option>`).join('')}
+      <option value="__otro__" ${otroProf?'selected':''}>Otro / invitado…</option>
+    </select>
+    ${otroProf?`<label for="m_prof_otro" class="hidden">Nombre del profesor</label><input id="m_prof_otro" style="margin-top:.5rem" placeholder="Nombre de quien dio la clase" value="${esc(m.profesorNombre)}" ${cerrada?'disabled':''}>`:''}
     <label for="m_tema">Tema del día</label><input id="m_tema" value="${esc(m.temaDia)}" ${cerrada?'disabled':''}></div>
   <div class="bloque"><h2>Asistencia — ${pres} de ${alumnos.length} presentes</h2>
     <ul class="lista">${alumnos.map(al=>{const p=!!m.asistencia[al.id];
       return `<li><button class="fila" ${cerrada?'disabled':'data-act="asistoggle" data-id="'+al.id+'"'}><span class="t">${esc(al.nombre)}</span><span class="chip ${p?'ok':'mal'}">${p?'Presente':'Ausente'}</span></button></li>`;}).join('')||'<li>'+vacio('No hay alumnos activos en esta clase','')+'</li>'}</ul></div>
   <div class="bloque"><h2>Visitantes</h2>
     <ul class="lista">${(m.visitantes||[]).map((v,i)=>`<li class="fila"><span><span class="t">${esc(v.nombre)}</span><br><span class="s">${esc(v.telefono||'')}</span></span>${cerrada?'':'<button class="btn dng small" data-act="visquitar" data-i="'+i+'">Quitar</button>'}</li>`).join('')||'<li class="muted small" style="padding:.5rem .2rem">Sin visitantes registrados.</li>'}</ul>
-    ${cerrada?'':`<div class="grid2"><div><label for="v_nom" class="hidden">Nombre</label><input id="v_nom" placeholder="Nombre del visitante"></div><div><label for="v_tel" class="hidden">Teléfono</label><input id="v_tel" placeholder="Teléfono" inputmode="tel"></div></div>
+    ${cerrada?'':`<div class="grid2"><div><label for="v_nom" class="hidden">Nombre</label><input id="v_nom" placeholder="Nombre del visitante" value="${esc(S.visDraft.nom)}"></div><div><label for="v_tel" class="hidden">Teléfono</label><input id="v_tel" placeholder="Teléfono" inputmode="tel" value="${esc(S.visDraft.tel)}"></div></div>
     <div class="acciones"><button class="btn sec small" data-act="visagregar">Agregar visitante</button></div>`}</div>
   <div class="bloque"><h2>Totales de la clase</h2><div class="grid2">
     <div><label for="m_bib">Biblias</label><input id="m_bib" type="number" min="0" value="${m.biblias}" ${cerrada?'disabled':''}></div>
     <div><label for="m_rev">Revistas</label><input id="m_rev" type="number" min="0" value="${m.revistas}" ${cerrada?'disabled':''}></div></div>
     <label for="m_ofr">Ofrenda (S/)</label><input id="m_ofr" type="number" min="0" step="0.10" value="${m.ofrenda}" ${cerrada?'disabled':''}></div>
-  ${cerrada?'':`<div class="acciones"><button class="btn sec" data-act="mapaguardar">Guardar avance</button><button class="btn" data-act="mapacerrar">Cerrar clase</button></div>`}`;
+  ${cerrada?(isGestor()&&S.sesionHoy?`<div class="acciones"><button class="btn" data-act="mapareabrir">Reabrir clase</button></div>`:''):`<div class="acciones"><button class="btn sec" data-act="mapaguardar">Guardar avance</button><button class="btn" data-act="mapacerrar">Cerrar clase</button></div>`}`;
   return h;
 }
 
@@ -867,7 +930,7 @@ function vFrecuencia(){
   ${filaFooter('Revistas',d.footer.revistas,d.totales.revistas)}
   ${filaFooter('Ofrendas',d.footer.ofrendas.map(v=>'S/ '+v.toFixed(2)),'S/ '+d.totales.ofrendas.toFixed(2))}
   </tfoot></table></div>
-  <p class="muted small" style="margin-top:1rem">P = presente, A = ausente, — = ese domingo no hubo clase.</p>`;
+  <p class="muted small" style="margin-top:1rem">P = presente, A = ausente, — = ese domingo no hubo clase o el alumno todavía no estaba en la lista.</p>`;
 }
 
 /* ---------- Ciclo ---------- */
@@ -1036,7 +1099,31 @@ function modalUsuario(id){
   ${checksClases(id?u:null)}`;
   const btns=[{label:'Cancelar',cls:'sec',fn:closeModal},{label:id?'Guardar usuario':'Crear usuario',fn:()=>guardarUsuario(id)}];
   if(id&&u.email)btns.unshift({label:'Enviar correo de nueva contraseña',cls:'sec',fn:async()=>{try{await auth.sendPasswordResetEmail(u.email);toast('Correo enviado.');}catch(e){toast(authErr(e),1);}}});
+  if(id&&isAdmin()&&!yo)btns.unshift({label:'Eliminar usuario',cls:'dng',fn:()=>eliminarUsuario(id)});
   openModal(id?'Editar usuario':'Nuevo usuario',body,btns);
+}
+async function eliminarUsuario(id){
+  const u=S.usuarios.find(x=>x.id===id); if(!u)return;
+  if(id===S.user.uid)return toast('No puedes eliminarte a ti mismo.',1);
+  if(!await confirmBox(`¿Eliminar a ${u.nombre}? Se quita de la lista de usuarios y de los equipos de profesores. Las clases que ya dio conservan su nombre en el historial.`,'Eliminar',true))return;
+  cargando(true);
+  try{
+    const b=db.batch(),cambios=[];
+    b.delete(db.collection('ebd_usuarios').doc(id));
+    S.clases.forEach(c=>{
+      const eq=c.equipo||[],i=eq.findIndex(e=>e.uid===id||(!e.uid&&normTxt(e.nombre)===normTxt(u.nombre)));
+      const esSec=!!(c.secretario&&c.secretario.uid===id);
+      if(i<0&&!esSec)return;
+      const d={};
+      if(i>=0){const nuevo=eq.filter((_,k)=>k!==i);let t=c.turno||0;if(i<t)t--;d.equipo=nuevo;d.turno=nuevo.length?Math.max(0,t)%nuevo.length:0;}
+      if(esSec)d.secretario=null;
+      b.update(db.collection('ebd_clases').doc(c.id),d); cambios.push([c,d]);
+    });
+    await b.commit();
+    cambios.forEach(([c,d])=>Object.assign(c,d));
+    S.usuarios=S.usuarios.filter(x=>x.id!==id);
+    cargando(false); closeModal(); render(); toast('Usuario eliminado.');
+  }catch(e){cargando(false);toast(e.message,1);}
 }
 async function guardarUsuario(id){
   const nombre=$('u_nom').value.trim(),rol=$('u_rol').value,sel=clasesMarcadas(); if(!nombre)return toast('Falta el nombre.',1);
@@ -1137,6 +1224,7 @@ const acciones={
   alnuevo(){modalAlumno(null,(S.fclase&&S.fclase!=='_sin')?S.fclase:'');},
   aledit(d){modalAlumno(d.id);},
   alasignar(){asignarPorEdad();},
+  alinact(){S.verInactAl=!S.verInactAl;render();},
   clnueva(){abrirClase(null);},
   cledit(d){abrirClase(d.id);},
   clguardar(){guardarClase();},
@@ -1167,13 +1255,15 @@ const acciones={
   mapaeditar(d){abrirMapaEdit(d.id);},
   mapaguardar(){guardarMapa(false);},
   mapacerrar(){guardarMapa(true);},
+  mapareabrir(){reabrirClase(S.mapaEditId);},
   sinclase(d){marcarSinClase(d.id);},
-  asistoggle(d){const m=S.mapaEdit;m.asistencia[d.id]=!m.asistencia[d.id];render();},
+  asistoggle(d){syncMapa();const m=S.mapaEdit;m.asistencia[d.id]=!m.asistencia[d.id];render();},
   visagregar(){
+    syncMapa();
     const n=$('v_nom').value.trim(); if(!n)return toast('Escribe el nombre del visitante.',1);
-    S.mapaEdit.visitantes.push({nombre:n,telefono:$('v_tel').value.trim()}); render();
+    S.mapaEdit.visitantes.push({nombre:n,telefono:$('v_tel').value.trim()}); S.visDraft={nom:'',tel:''}; render();
   },
-  visquitar(d){S.mapaEdit.visitantes.splice(+d.i,1);render();},
+  visquitar(d){syncMapa();S.mapaEdit.visitantes.splice(+d.i,1);render();},
   verinformehoy(){irInforme(S.sesionCerradaHoy.id);},
   ordenofrenda(){S.ordenOfrenda=!S.ordenOfrenda;render();},
   verfrecuencia(d){irFrecuencia(d.id);}
@@ -1181,7 +1271,8 @@ const acciones={
 const cambios={
   filtro(){S.fq=$('f_q').value;S.fclase=$('f_c').value;pintarAlumnos();},
   alclase(){aplicarClaseSexo(true);},
-  alfecha(){pistaEdad();}
+  alfecha(){pistaEdad();},
+  profsel(){syncMapa();render();}
 };
 document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(t&&acciones[t.dataset.act]){e.preventDefault();acciones[t.dataset.act](t.dataset,t);}});
 document.addEventListener('change',e=>{const t=e.target.closest('[data-chg]');if(t&&cambios[t.dataset.chg])cambios[t.dataset.chg](t.dataset,t);});
@@ -1190,5 +1281,3 @@ document.addEventListener('toggle',e=>{if(e.target.id==='detLec')S.lecOpen=e.tar
 </script>
 </body>
 </html>
-
-<!-- prueba de Claude Code -->
